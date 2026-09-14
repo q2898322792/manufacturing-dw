@@ -1,0 +1,77 @@
+# ============================================================
+# 第 4 段：四象限分类（固定管理标准 80% / 95%）
+# ============================================================
+# 判定规则：
+#   🌟 双优     : 产能达成率 ≥ 80% 且 良品率 ≥ 95%  → 标杆，保持并输出经验
+#   ⚡ 高产低质 : 产能达成率 ≥ 80% 但 良品率 < 95%  → 优先改善质量
+#   🛡️ 低产高质 : 产能达成率 < 80% 但 良品率 ≥ 95%  → 优先提升产能
+#   ⚠️ 双低     : 产能达成率 < 80% 且 良品率 < 95%  → 产能与质量双线整改
+CAP_STD, QUAL_STD = 80.0, 95.0
+
+
+def classify_quadrant(row):
+    cap_ok = row['capacity_achieved'] >= CAP_STD
+    qual_ok = row['qualified_rate'] >= QUAL_STD
+    if cap_ok and qual_ok:
+        return '双优'
+    if cap_ok and not qual_ok:
+        return '高产低质'
+    if not cap_ok and qual_ok:
+        return '低产高质'
+    return '双低'
+
+
+n_before = len(ws)
+ws = ws[['capacity_achieved', 'qualified_rate']]     .dropna(subset=['capacity_achieved', 'qualified_rate']).copy()
+if len(ws) < n_before:
+    print(f'⚠️ 提示：{n_before - len(ws)} 个车间因指标缺失被剔除')
+
+# —— 距标准差距（百分点 pp，正数=达标，负数=缺口）——
+ws['产能距标准'] = (ws['capacity_achieved'] - CAP_STD).round(2)
+ws['良率距标准'] = (ws['qualified_rate'] - QUAL_STD).round(2)
+# —— 缺口量（pp）与改善优先级（1=最紧急；只统计未达标方向）——
+ws['产能缺口'] = ws['产能距标准'].clip(upper=0).abs()
+ws['良率缺口'] = ws['良率距标准'].clip(upper=0).abs()
+ws['缺口合计'] = (ws['产能缺口'] + ws['良率缺口']).round(2)
+ws['象限'] = ws.apply(classify_quadrant, axis=1)
+ws['改善优先级'] = ws['缺口合计'].rank(method='min', ascending=False).astype(int)
+ws = ws.sort_values('改善优先级')
+print(ws.to_markdown(index=True, numalign="right", stralign="left"))
+
+
+print('四象限分类结果（改善优先级 1 = 最紧急）：')
+show = ws[['capacity_achieved', 'qualified_rate', '产能距标准', '良率距标准',
+           '象限', '缺口合计', '改善优先级']].rename(columns={
+    'capacity_achieved': '产能达成率%', 'qualified_rate': '良品率%',
+    '产能距标准': '产能距标准pp', '良率距标准': '良率距标准pp',
+    '缺口合计': '缺口合计pp'})
+print(show.to_string())
+
+print('\n各象限分布：')
+for q in ['双优', '高产低质', '低产高质', '双低']:
+    members = ws[ws['象限'] == q].index.tolist()
+    if members:
+        print(f'  {q}（{len(members)} 个）：{"、".join(members)}')
+
+# —— 关键洞察（随数据自动生成）——
+n_cap_low = int((ws['产能距标准'] < 0).sum())
+n_qual_low = int((ws['良率距标准'] < 0).sum())
+print('\n💡 关键洞察：')
+if n_qual_low == len(ws):
+    print(f'  ① 全部 {len(ws)} 个车间良品率均低于 {QUAL_STD:.0f}% 标准'
+          f'（公司整体均值仅 {overall_qual:.2f}%），质量缺口是全局共性短板，'
+          f'建议优先排查系统性质量根因（设备/工艺/物料）；')
+elif n_qual_low > 0:
+    print(f'  ① 有 {n_qual_low} 个车间良品率低于 {QUAL_STD:.0f}% 标准'
+          f'（公司整体均值 {overall_qual:.2f}%）；')
+else:
+    print(f'  ① 全部车间良品率达标（≥ {QUAL_STD:.0f}%），质量水平稳定；')
+if n_cap_low > 0:
+    worst_cap = ws[ws['产能距标准'] < 0].sort_values('产能距标准').index[0]
+    print(f'  ② 产能未达标车间 {n_cap_low} 个，距标准最远的是「{worst_cap}」'
+          f'（缺口 {abs(ws.loc[worst_cap, "产能距标准"]):.2f}pp）；')
+else:
+    print(f'  ② 全部车间产能达成率达标（≥ {CAP_STD:.0f}%）；')
+top1 = ws.sort_values('缺口合计', ascending=False).index[0]
+print(f'  ③ 当前最需改善：「{top1}」（缺口合计 {ws.loc[top1, "缺口合计"]:.2f}pp'
+      f'，其中产能 {ws.loc[top1, "产能缺口"]:.2f}pp、良率 {ws.loc[top1, "良率缺口"]:.2f}pp）。')

@@ -1,0 +1,734 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+import random
+import datetime
+from faker import Faker
+import pymysql
+
+# 数据库连接配置
+DB_CONFIG = {
+    'host': '127.0.0.1',
+    'port': 3306,
+    'user': 'root',
+    'password': 'root',  # MySQL 密码
+    'charset': 'utf8mb4'
+}
+
+# 时间范围配置（所有日期生成统一使用这些常量）
+START_DATE = datetime.date(2025, 10, 1)
+END_DATE = datetime.date(2026, 6, 30)
+SNAPSHOT_START = datetime.date(2025, 9, 1)
+SNAPSHOT_END = datetime.date(2026, 7, 31)
+
+# 脏数据比例
+DIRTY_RATIO = 0.005
+
+# 数据量配置
+CUSTOMER_COUNT = 80
+PRODUCT_COUNT = 60
+MATERIAL_COUNT = 50
+WORKSHOP_COUNT = 6
+SUPPLIER_COUNT = 30
+SALE_ORDER_COUNT = 30000
+WORKORDER_COUNT = 20000
+STOCK_IO_COUNT = 30000
+EQUIPMENT_COUNT = 4
+
+# 初始化 Faker 和数据库连接
+fake = Faker('zh_CN')
+conn = pymysql.connect(**DB_CONFIG)
+cursor = conn.cursor()
+
+# ID 池（内存缓存维度表 ID，供事实表外键引用）
+customer_ids = []
+product_ids = []
+material_ids = []
+workshop_ids = []
+supplier_ids = []
+workorder_ids = []
+order_ids = []
+
+# 工具函数
+def random_date(start, end):
+    """生成随机日期"""
+    return fake.date_between(start_date=start, end_date=end)
+
+
+def random_choice(ids, allow_null=False, null_prob=0.02):
+    """从 ID 池中随机取值，allow_null=True 时有一定概率返回 None"""
+    if allow_null and random.random() < null_prob:
+        return None
+    return random.choice(ids) if ids else None
+
+
+def generate_dirty_foreign_key(valid_ids, invalid_value='INVALID_001', dirty_prob=0.005):
+    """生成外键值：大部分情况返回有效 ID，小部分返回无效值（脏数据）"""
+    if random.random() < dirty_prob:
+        return invalid_value
+    return random.choice(valid_ids) if valid_ids else None
+
+
+def execute_sql(sql, params=None):
+    """执行 SQL"""
+    try:
+        cursor.execute(sql, params)
+    except Exception as e:
+        print(f"SQL执行失败: {e}")
+        print(f"SQL: {sql}")
+        raise
+
+
+def batch_insert(sql, data_list, batch_size=1000):
+    """批量插入"""
+    for i in range(0, len(data_list), batch_size):
+        batch = data_list[i:i + batch_size]
+        cursor.executemany(sql, batch)
+        conn.commit()
+        print(f"  已插入 {min(i + batch_size, len(data_list))}/{len(data_list)} 条")
+
+
+# 生成维度表数据
+def generate_customer():
+    """生成客户维度表（真实制造业客户名称）"""
+    print("1/11 生成客户数据...")
+    sql = """
+        INSERT INTO erp_db.customer 
+        (customer_id, customer_name, region, grade, type, industry, contact_person, contact_phone)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """
+
+    # 真实制造业客户名称列表
+    customer_names = [
+        '海尔智能科技有限公司', '美的电器制造集团', '格力空调设备有限公司', 'TCL电子科技股份',
+        '长虹电器股份公司', '海信视像科技集团', '创维数字技术公司', '康佳集团股份公司',
+        '联想电子科技有限公司', '华为技术设备公司', '中兴通讯科技集团', '浪潮电子信息股份',
+        '富士康工业互联公司', '比亚迪电子股份', '宁德时代新能源科技', '亿纬锂能股份公司',
+        '汇川技术股份公司', '大族激光科技集团', '中联重科股份公司', '三一重工设备制造',
+        '徐工机械制造集团', '柳工机械股份公司', '中车时代电气股份', '中国通号科技集团',
+        '上海电气集团股份', '东方电气股份公司', '哈电集团设备制造', '中核科技股份公司',
+        '宝武钢铁集团股份', '鞍钢集团股份公司', '首钢集团制造公司', '河钢集团股份公司'
+    ]
+
+    data = []
+    for _ in range(CUSTOMER_COUNT):
+        data.append((
+            fake.uuid4().replace('-', '')[:32],
+            random.choice(customer_names),
+            random.choice(['华东', '华南', '华北', '西南', '西北', '华中', '东北']),
+            random.choice(['A', 'B', 'C', 'D']),
+            random.choice(['企业', '个人', '政府']),
+            fake.bs()[:20],
+            fake.name(),
+            fake.phone_number()
+        ))
+    batch_insert(sql, data)
+
+    cursor.execute("SELECT customer_id FROM erp_db.customer")
+    global customer_ids
+    customer_ids = [row[0] for row in cursor.fetchall()]
+    print(f"  ✅ 客户数据完成，共 {len(customer_ids)} 条")
+
+
+def generate_product():
+    """生成产品维度表（真实制造业产品名称）"""
+    print("2/11 生成产品数据...")
+    sql = """
+        INSERT INTO erp_db.product 
+        (product_id, product_name, category_l1, category_l2, category_l3, spec, unit, standard_cost)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """
+
+    # 真实制造业产品名称列表（60个，超过 PRODUCT_COUNT=60）
+    product_names = [
+        # 家电类（15个）
+        ('智能变频空调', '家电', '空调', '变频空调'),
+        ('壁挂式空调', '家电', '空调', '壁挂式'),
+        ('中央空调', '家电', '空调', '中央空调'),
+        ('滚筒洗衣机', '家电', '洗衣机', '滚筒式'),
+        ('波轮洗衣机', '家电', '洗衣机', '波轮式'),
+        ('双开门冰箱', '家电', '冰箱', '双开门'),
+        ('三开门冰箱', '家电', '冰箱', '三开门'),
+        ('对开门冰箱', '家电', '冰箱', '对开门'),
+        ('智能电视', '家电', '电视', '智能电视'),
+        ('4K超高清电视', '家电', '电视', '4K超高清'),
+        ('OLED电视', '家电', '电视', 'OLED'),
+        ('空气净化器', '家电', '净化器', '空气净化'),
+        ('净水器', '家电', '净水器', 'RO反渗透'),
+        ('洗碗机', '家电', '洗碗机', '嵌入式'),
+        ('微波炉', '家电', '微波炉', '智能微波'),
+        # 工业设备类（15个）
+        ('工业机器人', '工业设备', '机器人', '六轴机器人'),
+        ('焊接机器人', '工业设备', '机器人', '焊接机器人'),
+        ('搬运机器人', '工业设备', '机器人', 'AGV搬运'),
+        ('数控机床', '工业设备', '机床', 'CNC数控'),
+        ('加工中心', '工业设备', '机床', '立式加工中心'),
+        ('注塑机', '工业设备', '注塑', '卧式注塑'),
+        ('冲压机', '工业设备', '冲压', '机械式冲压'),
+        ('液压冲压机', '工业设备', '冲压', '液压式'),
+        ('激光切割机', '工业设备', '切割', '光纤激光'),
+        ('等离子切割机', '工业设备', '切割', '等离子'),
+        ('自动化流水线', '工业设备', '自动化', '装配流水线'),
+        ('喷涂生产线', '工业设备', '自动化', '静电喷涂'),
+        ('包装生产线', '工业设备', '自动化', '自动包装'),
+        ('智能电表', '电子', '仪表', '智能电表'),
+        ('工业传感器', '电子', '传感器', '压力传感器'),
+        # 电子类（15个）
+        ('温度传感器', '电子', '传感器', '温度传感'),
+        ('湿度传感器', '电子', '传感器', '湿度传感'),
+        ('PLC控制器', '电子', '控制器', '可编程控制器'),
+        ('变频器', '电子', '控制器', '变频调速'),
+        ('伺服驱动器', '电子', '控制器', '伺服驱动'),
+        ('工业电源', '电子', '电源', '开关电源'),
+        ('UPS电源', '电子', '电源', '不间断电源'),
+        ('电路板', '电子', 'PCB', 'PCB电路板'),
+        ('控制面板', '电子', '面板', '人机界面'),
+        ('触摸屏', '电子', '面板', '工业触摸屏'),
+        ('工业相机', '电子', '视觉', '机器视觉'),
+        ('条码扫描器', '电子', '识别', '二维码扫描'),
+        ('RFID读写器', '电子', '识别', '射频识别'),
+        ('工业交换机', '电子', '网络', '工业以太网'),
+        ('无线模块', '电子', '通信', '无线传输'),
+        # 零部件类（15个）
+        ('步进电机', '零部件', '电机', '步进电机'),
+        ('伺服电机', '零部件', '电机', '伺服电机'),
+        ('行星减速器', '零部件', '传动', '行星减速器'),
+        ('深沟球轴承', '零部件', '传动', '深沟球轴承'),
+        ('滚珠丝杠', '零部件', '传动', '精密丝杠'),
+        ('线性导轨', '零部件', '传动', '线性导轨'),
+        ('标准气缸', '零部件', '气动', '标准气缸'),
+        ('电磁换向阀', '零部件', '气动', '电磁换向阀'),
+        ('液压油缸', '零部件', '液压', '液压油缸'),
+        ('液压泵', '零部件', '液压', '齿轮泵'),
+        ('O型密封圈', '零部件', '密封', 'O型密封圈'),
+        ('不锈钢螺丝', '零部件', '紧固件', '不锈钢螺丝'),
+        ('六角螺母', '零部件', '紧固件', '六角螺母'),
+        ('平垫圈', '零部件', '紧固件', '平垫圈'),
+        ('梅花联轴器', '零部件', '传动', '梅花联轴器'),
+    ]
+
+    data = []
+    for _ in range(PRODUCT_COUNT):
+        name, l1, l2, l3 = random.choice(product_names)
+        data.append((
+            fake.uuid4().replace('-', '')[:32],
+            name,
+            l1, l2, l3,
+            fake.bothify(text='??-###-??'),
+            random.choice(['台', '套', '个']),
+            round(random.uniform(500, 20000), 2)
+        ))
+    batch_insert(sql, data)
+
+    cursor.execute("SELECT product_id FROM erp_db.product")
+    global product_ids
+    product_ids = [row[0] for row in cursor.fetchall()]
+    print(f"  ✅ 产品数据完成，共 {len(product_ids)} 条")
+
+
+def generate_material():
+    """生成物料维度表（真实制造业物料名称）"""
+    print("3/11 生成物料数据...")
+    sql = """
+        INSERT INTO erp_db.material 
+        (material_id, material_name, category, sub_category, spec, unit, safety_stock, standard_cost)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """
+
+    # 真实物料名称列表（60个，已去重，超过 MATERIAL_COUNT=50）
+    material_names = [
+        # 电子件（15个）
+        ('PCB电路板', '原材料', '电子件', 'FR-4双面板'),
+        ('IC芯片', '原材料', '电子件', 'MCU主控芯片'),
+        ('电阻', '原材料', '电子件', '贴片电阻'),
+        ('电容', '原材料', '电子件', '电解电容'),
+        ('继电器', '原材料', '电子件', '电磁继电器'),
+        ('连接器', '原材料', '电子件', '排针连接器'),
+        ('接插件', '原材料', '电子件', '端子排'),
+        ('电线电缆', '原材料', '电子件', 'RVV电缆'),
+        ('电源线', '原材料', '电子件', '三芯电源线'),
+        ('信号线', '原材料', '电子件', '屏蔽双绞线'),
+        ('保险丝', '原材料', '电子件', '熔断器'),
+        ('开关', '原材料', '电子件', '按钮开关'),
+        ('指示灯', '原材料', '电子件', 'LED指示灯'),
+        ('蜂鸣器', '原材料', '电子件', '压电蜂鸣器'),
+        ('散热片', '原材料', '电子件', '铝制散热片'),
+        # 结构件（15个）
+        ('碳素钢', '原材料', '结构件', 'Q235碳素钢'),
+        ('不锈钢', '原材料', '结构件', '304不锈钢'),
+        ('铝合金型材', '原材料', '结构件', '6061铝合金'),
+        ('铜排', '原材料', '结构件', 'T2紫铜排'),
+        ('热轧钢板', '原材料', '结构件', '热轧钢板'),
+        ('冷轧钢板', '原材料', '结构件', '冷轧钢板'),
+        ('镀锌钢板', '原材料', '结构件', '镀锌钢板'),
+        ('等边角钢', '原材料', '结构件', '等边角钢'),
+        ('碳素槽钢', '原材料', '结构件', '碳素槽钢'),
+        ('方钢管', '原材料', '结构件', '方钢管'),
+        ('圆钢管', '原材料', '结构件', '圆钢管'),
+        ('不锈钢波纹管', '原材料', '结构件', '不锈钢波纹管'),
+        ('压缩弹簧', '原材料', '结构件', '压缩弹簧'),
+        ('不锈钢螺丝', '原材料', '结构件', '不锈钢螺丝'),
+        ('拉铆钉', '原材料', '结构件', '拉铆钉'),
+        # 塑胶件（10个）
+        ('ABS注塑件', '半成品', '塑胶件', 'ABS注塑件'),
+        ('PC注塑件', '半成品', '塑胶件', 'PC注塑件'),
+        ('O型密封圈', '原材料', '塑胶件', 'O型密封圈'),
+        ('橡胶密封垫', '原材料', '塑胶件', '橡胶密封垫'),
+        ('EPE珍珠棉', '辅料', '包材', 'EPE珍珠棉'),
+        ('瓦楞纸箱', '辅料', '包材', '瓦楞纸箱'),
+        ('不干胶标签', '辅料', '包材', '不干胶标签'),
+        ('PE缠绕膜', '辅料', '包材', 'PE缠绕膜'),
+        ('封箱胶带', '辅料', '包材', '封箱胶带'),
+        ('气泡缓冲膜', '辅料', '包材', '气泡缓冲膜'),
+        # 五金件（10个）
+        ('步进电机', '半成品', '五金', '步进电机'),
+        ('伺服电机', '半成品', '五金', '伺服电机'),
+        ('行星减速器', '半成品', '五金', '行星减速器'),
+        ('深沟球轴承', '原材料', '五金', '深沟球轴承'),
+        ('精密丝杠', '原材料', '五金', '精密丝杠'),
+        ('线性导轨', '原材料', '五金', '线性导轨'),
+        ('标准气缸', '原材料', '五金', '标准气缸'),
+        ('电磁换向阀', '原材料', '五金', '电磁换向阀'),
+        ('液压油缸', '原材料', '五金', '液压油缸'),
+        ('梅花联轴器', '原材料', '五金', '梅花联轴器'),
+        # 辅料（10个）
+        ('抗磨液压油', '辅料', '油品', '抗磨液压油'),
+        ('齿轮润滑油', '辅料', '油品', '齿轮润滑油'),
+        ('乳化切削液', '辅料', '油品', '乳化切削液'),
+        ('碳钢焊条', '辅料', '焊材', '碳钢焊条'),
+        ('气体保护焊丝', '辅料', '焊材', '气体保护焊丝'),
+        ('高纯氩气', '辅料', '气体', '高纯氩气'),
+        ('CO2气体', '辅料', '气体', 'CO2气体'),
+        ('防锈油漆', '辅料', '涂料', '防锈油漆'),
+        ('油漆稀释剂', '辅料', '涂料', '油漆稀释剂'),
+        ('水磨砂纸', '辅料', '耗材', '水磨砂纸'),
+    ]
+
+    data = []
+    for _ in range(MATERIAL_COUNT):
+        name, category, sub, spec = random.choice(material_names)
+        data.append((
+            fake.uuid4().replace('-', '')[:32],
+            name,
+            category, sub, spec,
+            random.choice(['个', '套', '米', '公斤', '片']),
+            random.randint(0, 1000),
+            round(random.uniform(5, 5000), 2)
+        ))
+    batch_insert(sql, data)
+
+    cursor.execute("SELECT material_id FROM erp_db.material")
+    global material_ids
+    material_ids = [row[0] for row in cursor.fetchall()]
+    print(f"  ✅ 物料数据完成，共 {len(material_ids)} 条")
+
+
+def generate_workshop():
+    """生成车间维度表"""
+    print("4/11 生成车间数据...")
+    sql = """
+        INSERT INTO mes_db.workshop 
+        (workshop_id, workshop_name, production_line, workshop_type, capacity_per_day)
+        VALUES (%s, %s, %s, %s, %s)
+    """
+    data = []
+    workshop_names = ['冲压车间', '焊接车间', '装配车间', '涂装车间', '机加工车间', '质检中心']
+    for i, name in enumerate(workshop_names[:WORKSHOP_COUNT]):
+        data.append((
+            fake.uuid4().replace('-', '')[:32],
+            name,
+            f'{random.choice(["一", "二", "三"])}车间',
+            name.replace('车间', ''),
+            random.randint(500, 5000)
+        ))
+    batch_insert(sql, data)
+
+    cursor.execute("SELECT workshop_id FROM mes_db.workshop")
+    global workshop_ids
+    workshop_ids = [row[0] for row in cursor.fetchall()]
+    print(f"  ✅ 车间数据完成，共 {len(workshop_ids)} 条")
+
+
+def generate_supplier():
+    """生成供应商维度表"""
+    print("5/11 生成供应商数据...")
+    sql = """
+        INSERT INTO wms_db.supplier 
+        (supplier_id, supplier_name, supply_category, cooperation_grade, cooperation_status, contact_person, contact_phone)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """
+    data = []
+    for _ in range(SUPPLIER_COUNT):
+        data.append((
+            fake.uuid4().replace('-', '')[:32],
+            fake.company()[:40],
+            random.choice(['电子元器件', '结构件', '包材', '五金', '化工材料']),
+            random.choice(['A', 'B', 'C', 'D']),
+            random.choice(['合作中', '合作中', '合作中', '已终止']),
+            fake.name(),
+            fake.phone_number()
+        ))
+    batch_insert(sql, data)
+
+    cursor.execute("SELECT supplier_id FROM wms_db.supplier")
+    global supplier_ids
+    supplier_ids = [row[0] for row in cursor.fetchall()]
+    print(f"  ✅ 供应商数据完成，共 {len(supplier_ids)} 条")
+
+# 生成事实表数据
+def generate_sale_order():
+    """生成销售订单事实表"""
+    print("6/11 生成销售订单数据...")
+    sql = """
+        INSERT INTO erp_db.sale_order 
+        (order_id, customer_id, product_id, order_date, order_amount, tax_amount, 
+         discount_amount, net_amount, order_status, delivery_date, payment_date, region, quantity)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """
+    data = []
+    regions = ['华东', '华南', '华北', '西南', '西北', '华中', '东北']
+
+    for i in range(SALE_ORDER_COUNT):
+        order_date = random_date(START_DATE, END_DATE)
+        amount = round(random.uniform(1000, 100000), 2)
+        tax = round(amount * 0.13, 2)
+        discount = round(amount * random.uniform(0, 0.15), 2) if random.random() > 0.3 else 0
+        net = round(amount + tax - discount, 2)
+
+        # 脏数据：1% 概率制造异常金额
+        if random.random() < DIRTY_RATIO:
+            amount = random.choice([-999, 99999999, 0])
+            tax = 0
+            net = amount
+
+        # 脏数据：0.5% 概率 customer_id 为空
+        if random.random() < DIRTY_RATIO / 2:
+            customer_id = None
+        else:
+            customer_id = random.choice(customer_ids)
+
+        # 脏数据：0.5% 概率 product_id 为无效值
+        product_id = generate_dirty_foreign_key(product_ids, 'INVALID_001', DIRTY_RATIO)
+
+        status = random.choice(['已提交', '已发货', '已完成', '已完成', '已完成', '已取消', '已作废'])
+        delivery_date = random_date(order_date,
+                                    order_date + datetime.timedelta(days=30)) if random.random() > 0.2 else None
+        payment_date = random_date(order_date,
+                                   order_date + datetime.timedelta(days=60)) if random.random() > 0.3 else None
+
+        data.append((
+            fake.uuid4().replace('-', '')[:32],
+            customer_id,
+            product_id,
+            order_date,
+            amount, tax, discount, net,
+            status,
+            delivery_date,
+            payment_date,
+            random.choice(regions),
+            random.randint(1, 100)
+        ))
+
+    batch_insert(sql, data)
+
+    cursor.execute("SELECT order_id FROM erp_db.sale_order")
+    global order_ids
+    order_ids = [row[0] for row in cursor.fetchall()]
+    print(f"  ✅ 销售订单完成，共 {len(order_ids)} 条")
+
+
+def generate_workorder():
+    """生成生产工单事实表"""
+    print("7/11 生成生产工单数据...")
+    sql = """
+        INSERT INTO mes_db.produce_workorder 
+        (workorder_id, product_id, workshop_id, plan_qty, actual_qty, qualified_qty, defect_qty,
+         defect_type, plan_start_date, plan_end_date, actual_start_date, actual_end_date, 
+         workorder_status, labor_hours, material_loss)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """
+    data = []
+    defect_types = ['尺寸偏差', '外观缺陷', '性能失效', '其他']
+
+    for _ in range(WORKORDER_COUNT):
+        plan_qty = random.randint(50, 2000)
+
+        # 脏数据：0.5% 概率产量异常
+        if random.random() < DIRTY_RATIO:
+            actual_qty = plan_qty * 10
+        else:
+            actual_qty = int(plan_qty * random.uniform(0.5, 1.1))
+
+        qualified = int(actual_qty * random.uniform(0.85, 1.0)) if actual_qty > 0 else 0
+        defect = actual_qty - qualified if actual_qty > 0 else 0
+
+        plan_start = random_date(START_DATE, END_DATE)
+        plan_end = random_date(plan_start, plan_start + datetime.timedelta(days=30))
+
+        # 工单状态及实际日期
+        status = random.choice(['未开工', '生产中', '已完工', '已关闭', '已逾期'])
+        if status in ['已完工', '已关闭']:
+            actual_start = random_date(plan_start, plan_start + datetime.timedelta(days=5))
+            actual_end = random_date(actual_start, plan_end + datetime.timedelta(days=7))
+        elif status == '生产中':
+            actual_start = random_date(plan_start, plan_start + datetime.timedelta(days=5))
+            actual_end = None
+        else:
+            actual_start = None
+            actual_end = None
+
+        # 脏数据：0.5% 概率 product_id 为空
+        if random.random() < DIRTY_RATIO / 2:
+            product_id = None
+        else:
+            product_id = random.choice(product_ids)
+
+        data.append((
+            fake.uuid4().replace('-', '')[:32],
+            product_id,
+            random.choice(workshop_ids),
+            plan_qty,
+            max(0, actual_qty),
+            max(0, qualified),
+            max(0, defect),
+            random.choice(defect_types) if defect > 0 else None,
+            plan_start, plan_end,
+            actual_start, actual_end,
+            status,
+            round(random.uniform(10, 500), 2),
+            round(random.uniform(0, 5000), 2)
+        ))
+
+    batch_insert(sql, data)
+
+    cursor.execute("SELECT workorder_id FROM mes_db.produce_workorder")
+    global workorder_ids
+    workorder_ids = [row[0] for row in cursor.fetchall()]
+    print(f"  ✅ 生产工单完成，共 {len(workorder_ids)} 条")
+
+
+def generate_stock_io():
+    """生成出入库明细事实表"""
+    print("8/11 生成出入库明细数据...")
+    sql = """
+        INSERT INTO wms_db.stock_io_detail 
+        (io_id, material_id, warehouse_id, io_type, io_qty, io_amount, unit_price, io_date,
+         supplier_id, workorder_id, order_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """
+    data = []
+    warehouses = ['原材料仓', '半成品仓', '成品仓']
+
+    for _ in range(STOCK_IO_COUNT):
+        io_type = random.choice(['IN', 'OUT'])
+        io_date = random_date(START_DATE, END_DATE)
+        qty = random.randint(10, 500)
+        unit_price = round(random.uniform(10, 1000), 2)
+        amount = round(qty * unit_price, 2)
+
+        # 脏数据：0.5% 概率金额异常
+        if random.random() < DIRTY_RATIO:
+            amount = -9999
+
+        # 外键：脏数据概率
+        material_id = generate_dirty_foreign_key(material_ids, 'INVALID_MAT', DIRTY_RATIO)
+        supplier_id = random.choice(supplier_ids) if io_type == 'IN' and random.random() > 0.5 else None
+        workorder_id = random.choice(workorder_ids) if io_type == 'OUT' and random.random() > 0.5 else None
+        order_id = random.choice(order_ids) if io_type == 'OUT' and random.random() > 0.3 else None
+
+        data.append((
+            fake.uuid4().replace('-', '')[:32],
+            material_id,
+            random.choice(warehouses),
+            io_type,
+            qty,
+            amount,
+            unit_price,
+            io_date,
+            supplier_id,
+            workorder_id,
+            order_id
+        ))
+
+    batch_insert(sql, data)
+    print(f"  ✅ 出入库明细完成，共 {STOCK_IO_COUNT} 条")
+
+
+def generate_stock_snapshot():
+    """生成库存每日快照事实表"""
+    print("9/11 生成库存快照数据...")
+    sql = """
+        INSERT INTO wms_db.stock_snapshot 
+        (snapshot_id, material_id, warehouse_id, snapshot_date, stock_qty, stock_amount)
+        VALUES (%s, %s, %s, %s, %s, %s)
+    """
+    data = []
+    warehouses = ['原材料仓', '半成品仓', '成品仓']
+    current_date = SNAPSHOT_START
+    while current_date <= SNAPSHOT_END:
+        for material_id in material_ids:
+            qty = random.randint(0, 2000)
+            price = round(random.uniform(10, 500), 2)
+            data.append((
+                fake.uuid4().replace('-', '')[:32],
+                material_id,
+                random.choice(warehouses),
+                current_date,
+                qty,
+                round(qty * price, 2)
+            ))
+        current_date += datetime.timedelta(days=1)
+        if len(data) % 1000 == 0:
+            print(f"  已生成 {len(data)} 条快照记录...")
+
+    batch_insert(sql, data)
+    print(f"  ✅ 库存快照完成，共 {len(data)} 条")
+
+
+def generate_cost_voucher():
+    """生成成本凭证事实表"""
+    print("生成成本凭证数据...")
+    sql = """
+        INSERT INTO erp_db.cost_voucher 
+        (voucher_id, product_id, workshop_id, workorder_id, material_cost, labor_cost, mfg_cost, total_cost, cost_month)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """
+    data = []
+
+    # 从工单表查询所有工单 ID
+    cursor.execute("SELECT workorder_id, product_id, workshop_id FROM mes_db.produce_workorder")
+    workorders = cursor.fetchall()
+    for workorder_id, product_id, workshop_id in workorders:
+        material_cost = round(random.uniform(100, 5000), 2)
+        labor_cost = round(random.uniform(50, 2000), 2)
+        mfg_cost = round(random.uniform(30, 1500), 2)
+        total_cost = round(material_cost + labor_cost + mfg_cost, 2)
+        data.append((
+            fake.uuid4().replace('-', '')[:32],
+            product_id,
+            workshop_id,
+            workorder_id,
+            material_cost,
+            labor_cost,
+            mfg_cost,
+            total_cost,
+            fake.date_between(start_date=START_DATE, end_date=END_DATE).strftime('%Y-%m')
+        ))
+
+    batch_insert(sql, data)
+    print(f"  ✅ 成本凭证完成，共 {len(data)} 条")
+
+def generate_equipment_runtime():
+    """生成设备运行记录事实表"""
+    print("10/11 生成设备运行数据...")
+    sql = """
+        INSERT INTO mes_db.equipment_runtime 
+        (record_id, equipment_id, workshop_id, record_date, runtime_min, idle_min, fault_min, maintain_min)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """
+    data = []
+    equipment_names = ['设备A-001', '设备A-002', '设备B-001', '设备C-001']
+    current_date = START_DATE
+    while current_date <= END_DATE:
+        for eq_name in equipment_names[:EQUIPMENT_COUNT]:
+            # 总分钟数 1440，按比例分配
+            runtime = random.randint(400, 800)
+            idle = random.randint(100, 400)
+            fault = random.randint(0, 200) if random.random() > 0.7 else 0
+            maintain = random.randint(0, 100) if random.random() > 0.5 else 0
+            total = runtime + idle + fault + maintain
+            data.append((
+                fake.uuid4().replace('-', '')[:32],
+                eq_name,
+                random.choice(workshop_ids),
+                current_date,
+                runtime,
+                idle,
+                fault,
+                maintain
+            ))
+        current_date += datetime.timedelta(days=1)
+
+    batch_insert(sql, data)
+    print(f"  ✅ 设备运行数据完成，共 {len(data)} 条")
+
+
+# 外键完整性验证
+def verify_foreign_keys():
+    """验证外键关联完整性"""
+    print("11/11 验证外键关联...")
+    checks = [
+        ("销售订单-客户",
+         "SELECT COUNT(*) FROM erp_db.sale_order o LEFT JOIN erp_db.customer c ON o.customer_id = c.customer_id WHERE o.customer_id IS NOT NULL AND c.customer_id IS NULL"),
+        ("销售订单-产品",
+         "SELECT COUNT(*) FROM erp_db.sale_order o LEFT JOIN erp_db.product p ON o.product_id = p.product_id WHERE o.product_id IS NOT NULL AND p.product_id IS NULL AND o.product_id != 'INVALID_001'"),
+        ("生产工单-产品",
+         "SELECT COUNT(*) FROM mes_db.produce_workorder w LEFT JOIN erp_db.product p ON w.product_id = p.product_id WHERE w.product_id IS NOT NULL AND p.product_id IS NULL"),
+        ("生产工单-车间",
+         "SELECT COUNT(*) FROM mes_db.produce_workorder w LEFT JOIN mes_db.workshop ws ON w.workshop_id = ws.workshop_id WHERE w.workshop_id IS NOT NULL AND ws.workshop_id IS NULL"),
+        ("出入库-物料",
+         "SELECT COUNT(*) FROM wms_db.stock_io_detail s LEFT JOIN erp_db.material m ON s.material_id = m.material_id WHERE s.material_id IS NOT NULL AND m.material_id IS NULL AND s.material_id != 'INVALID_MAT'"),
+        ("库存快照-物料",
+         "SELECT COUNT(*) FROM wms_db.stock_snapshot s LEFT JOIN erp_db.material m ON s.material_id = m.material_id WHERE s.material_id IS NOT NULL AND m.material_id IS NULL"),
+    ]
+
+    all_passed = True
+    for name, sql in checks:
+        cursor.execute(sql)
+        count = cursor.fetchone()[0]
+        status = "✅" if count == 0 else f"⚠️ {count}条无关联"
+        print(f"  {name}: {status}")
+        if count > 0:
+            all_passed = False
+
+    return all_passed
+
+
+# 主程序
+def main():
+    print("=" * 60)
+    print("开始生成仿真数据...")
+    print(f"时间范围: {START_DATE} ~ {END_DATE}")
+    print(f"脏数据比例: {DIRTY_RATIO * 100}%")
+    print("=" * 60)
+
+    try:
+        # 清空现有数据
+        # cursor.execute("SET FOREIGN_KEY_CHECKS=0")
+        # cursor.execute("TRUNCATE erp_db.sale_order")
+
+        # 生成维度表
+        generate_customer()
+        generate_product()
+        generate_material()
+        generate_workshop()
+        generate_supplier()
+
+        # 生成事实表
+        generate_sale_order()
+        generate_workorder()
+        generate_cost_voucher()
+        generate_stock_io()
+        generate_stock_snapshot()
+        generate_equipment_runtime()
+
+        # 验证
+        print("\n" + "=" * 60)
+        print("外键完整性验证结果：")
+        passed = verify_foreign_keys()
+
+        if passed:
+            print("\n🎉 所有数据生成完成！外键关联全部正常！")
+        else:
+            print("\n⚠️ 数据生成完成，但存在部分外键无法关联（可能是脏数据）")
+
+    except Exception as e:
+        print(f"\n❌ 执行失败: {e}")
+        conn.rollback()
+        raise
+    finally:
+        cursor.close()
+        conn.close()
+
+
+if __name__ == "__main__":
+    main()
