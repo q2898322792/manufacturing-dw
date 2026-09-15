@@ -25,6 +25,13 @@ import hashlib
 from faker import Faker
 import pymysql
 
+# Windows 控制台编码兼容：GBK 控制台打印 emoji/中文不抛 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 # ============================================================
 # 一、全局配置
 # ============================================================

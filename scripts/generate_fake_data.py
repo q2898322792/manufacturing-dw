@@ -12,8 +12,16 @@ import random
 import datetime
 import hashlib
 import sys
+import os
 from faker import Faker
 import pymysql
+
+# Windows 控制台编码兼容：GBK 控制台打印 emoji/中文不抛 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
 
 # ============================================================
 # 一、全局配置
@@ -21,10 +29,10 @@ import pymysql
 
 # 数据库连接配置
 DB_CONFIG = {
-    'host': '127.0.0.1',
-    'port': 3306,
-    'user': 'root',
-    'password': 'root',  # ⚠️ 改成你自己的 MySQL 密码
+    'host': os.environ.get('DB_HOST', '127.0.0.1'),
+    'port': int(os.environ.get('DB_PORT', '3306')),
+    'user': os.environ.get('DB_USER', 'root'),
+    'password': os.environ.get('DB_PASSWORD', 'root'),   # 可用环境变量覆盖
     'charset': 'utf8mb4'
 }
 
