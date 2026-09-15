@@ -564,10 +564,13 @@ def generate_sale_order():
             else:                           # 12% 迟到
                 delivery_date = order_date + datetime.timedelta(
                     days=random.randint(DELIVERY_SLA_DAYS + 1, 40))
-            status = '已完成' if random.random() < 0.7 else '已发货'
-            # 回款：80% 在交付后 40 天内回款，其余留作回款滞后
-            payment_date = (delivery_date + datetime.timedelta(days=random.randint(0, 40))
-                            if random.random() < 0.8 else None)
+            if random.random() < 0.03:      # 3% 交付后退货（退货金额进 return_amt）
+                status, payment_date = '已退货', None
+            else:
+                status = '已完成' if random.random() < 0.7 else '已发货'
+                # 回款：80% 在交付后 40 天内回款，其余留作回款滞后
+                payment_date = (delivery_date + datetime.timedelta(days=random.randint(0, 40))
+                                if random.random() < 0.8 else None)
 
         data.append((
             fake.uuid4().replace('-', '')[:32],

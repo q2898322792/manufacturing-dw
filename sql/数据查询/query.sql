@@ -1,4 +1,4 @@
- 1. 查看各表数据量
+ -- 1. 查看各表数据量
 SELECT 'customer' AS 表名, COUNT(*) AS 行数 FROM erp_db.customer
 UNION ALL
 SELECT 'product', COUNT(*) FROM erp_db.product

@@ -13,8 +13,8 @@
 --      防止 ODS 偶发存在同主键多版本时把维度灌重；
 --   4. 可重复执行：重复运行只是把维度表重建为相同内容，不报错、不膨胀。
 --
---  说明：本文件只重建 5 张慢变化率很低的维度表；
---        dim_date / dim_equipment 等由建表脚本单独初始化，不在此重建。
+--  说明：本文件重建 5 张慢变化率很低的维度表 + dim_date 日期维度；
+--        dim_date 改为按 ODS 实际日期范围动态重建（不再写死），dim_equipment 由建表脚本单独初始化。
 -- ============================================================
 
 -- 1. 清空 5 张维度表（全量重建前先清空）
@@ -118,3 +118,35 @@ FROM (
     FROM ods_db.ods_mes_workshop
 ) t
 WHERE rn = 1;
+
+-- ============================================================
+-- 7. 日期维度（动态重建：范围取自 ODS 各事实表的实际日期，不再写死）
+--    说明：min/max 取自 5 张事实日期列的并集，MIN/MAX 自动忽略 NULL，
+--    保证 dim_date 与业务数据严格对齐，不覆盖无数据的日子。
+-- ============================================================
+TRUNCATE TABLE dwd_db.dim_date;
+SET @dmin = (SELECT MIN(d) FROM (
+    SELECT MIN(snapshot_date) AS d FROM ods_db.ods_wms_stock_snapshot
+    UNION ALL SELECT MIN(order_date)    FROM ods_db.ods_erp_sale_order
+    UNION ALL SELECT MIN(io_date)       FROM ods_db.ods_wms_stock_io
+    UNION ALL SELECT MIN(plan_start_date) FROM ods_db.ods_mes_workorder
+    UNION ALL SELECT MIN(record_date)   FROM ods_db.ods_mes_equipment_runtime
+) x);
+SET @dmax = (SELECT MAX(d) FROM (
+    SELECT MAX(snapshot_date) AS d FROM ods_db.ods_wms_stock_snapshot
+    UNION ALL SELECT MAX(order_date)    FROM ods_db.ods_erp_sale_order
+    UNION ALL SELECT MAX(io_date)       FROM ods_db.ods_wms_stock_io
+    UNION ALL SELECT MAX(plan_start_date) FROM ods_db.ods_mes_workorder
+    UNION ALL SELECT MAX(record_date)   FROM ods_db.ods_mes_equipment_runtime
+) x);
+INSERT INTO dwd_db.dim_date (date_key, YEAR, QUARTER, MONTH, WEEK, DAY, is_workday)
+WITH RECURSIVE date_range AS (
+    SELECT @dmin AS dt
+    UNION ALL
+    SELECT DATE_ADD(dt, INTERVAL 1 DAY)
+    FROM date_range
+    WHERE dt < @dmax
+)
+SELECT dt, YEAR(dt), QUARTER(dt), MONTH(dt), WEEK(dt, 1), DAY(dt),
+       CASE WHEN DAYOFWEEK(dt) IN (1, 7) THEN 0 ELSE 1 END
+FROM date_range;

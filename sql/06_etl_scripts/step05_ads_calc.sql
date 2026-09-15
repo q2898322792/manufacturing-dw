@@ -33,9 +33,13 @@ SELECT
     cm.labor_cost_ratio,
     cm.mfg_cost_ratio
 FROM (
-    SELECT stat_date FROM dws_db.dws_sale_day
-    UNION
-    SELECT stat_date FROM dws_db.dws_produce_day
+    SELECT dd.date_key AS stat_date
+    FROM dwd_db.dim_date dd
+    WHERE dd.date_key IN (
+        SELECT stat_date FROM dws_db.dws_sale_day
+        UNION
+        SELECT stat_date FROM dws_db.dws_produce_day
+    )
 ) d
 LEFT JOIN (
     SELECT
@@ -356,10 +360,12 @@ ORDER BY t.gap_amt DESC
 LIMIT 30;
 
 -- 11.5 回款滞后：已发货/已完成但发货超过 30 天仍未回款，按客户汇总取前 30
+-- 基准日取「数据内最新发货日」，不再用 CURDATE()（否则同样数据不同天跑结果不同，不幂等）
+SET @as_of_date = (SELECT MAX(delivery_date) FROM dwd_db.dwd_sale_order_detail);
 INSERT INTO ads_db.ads_alert_warning (alert_id, alert_date, alert_type, alert_level, target_name, target_id, current_value, threshold_value, alert_desc, is_resolved)
 SELECT
     CONCAT('AL-PAY-', LPAD(ROW_NUMBER() OVER (ORDER BY t.amt DESC), 4, '0')) AS alert_id,
-    CURDATE(),
+    @as_of_date,
     '回款滞后',
     CASE WHEN t.max_overdue >= 90 THEN '高' WHEN t.max_overdue >= 60 THEN '中' ELSE '低' END,
     COALESCE(c.customer_name, t.customer_id),
@@ -376,12 +382,12 @@ FROM (
         customer_id,
         COUNT(*) AS cnt,
         SUM(order_amount) AS amt,
-        MAX(DATEDIFF(CURDATE(), delivery_date)) AS max_overdue
+        MAX(DATEDIFF(@as_of_date, delivery_date)) AS max_overdue
     FROM dwd_db.dwd_sale_order_detail
     WHERE payment_date IS NULL
       AND delivery_date IS NOT NULL
       AND order_status NOT IN ('已取消', '已作废')
-      AND delivery_date <= CURDATE() - INTERVAL 30 DAY
+      AND delivery_date <= @as_of_date - INTERVAL 30 DAY
     GROUP BY customer_id
 ) t
 LEFT JOIN dwd_db.dim_customer c ON t.customer_id = c.customer_id

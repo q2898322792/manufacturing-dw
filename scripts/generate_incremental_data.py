@@ -230,9 +230,12 @@ def generate_incremental_sale_orders(target_date):
                 delivery_date = target_date + datetime.timedelta(days=random.randint(1, DELIVERY_SLA_DAYS))
             else:
                 delivery_date = target_date + datetime.timedelta(days=random.randint(DELIVERY_SLA_DAYS + 1, 40))
-            status = '已完成' if random.random() < 0.7 else '已发货'
-            payment_date = (delivery_date + datetime.timedelta(days=random.randint(0, 40))
-                            if random.random() < 0.8 else None)
+            if random.random() < 0.03:      # 3% 交付后退货（退货金额进 return_amt）
+                status, payment_date = '已退货', None
+            else:
+                status = '已完成' if random.random() < 0.7 else '已发货'
+                payment_date = (delivery_date + datetime.timedelta(days=random.randint(0, 40))
+                                if random.random() < 0.8 else None)
 
         now = datetime.datetime.now()
         data.append((
