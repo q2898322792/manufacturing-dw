@@ -26,7 +26,10 @@ import matplotlib
 matplotlib.use('Agg')                      # 无窗口环境（终端/CI）必须用 Agg
 import matplotlib.pyplot as plt
 
-plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'Arial Unicode MS', 'DejaVu Sans']
+# 字体必须与 notebook 第 1 个 cell 保持一致：
+# 若这里换成 Microsoft YaHei 之类字形更全的字体，会把 notebook 里
+# “字体缺字形导致显示成方框”的问题掩盖掉，失去离线预览的意义。
+plt.rcParams['font.sans-serif'] = ['SimHei', 'Arial Unicode MS', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 
 CAP_STD, QUAL_STD = 80.0, 95.0

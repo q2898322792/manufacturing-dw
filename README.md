@@ -157,3 +157,10 @@ python scripts\generate_incremental_data.py 2026-07-01 2026-09-10
 4. 抽取模式忘了点「更新」
 5. TOP N 忘了设排序
 6. 计算字段漏了分母保护（`SUM(a)/NULLIF(SUM(b),0)`）
+
+### 代码层的一个坑（matplotlib 字体）
+
+**图里别用 U+2212「−」（真减号）**。notebook 用的字体是 `SimHei`（GB2312 系），**没有这个字形**，图上会显示成方框 `□`，例如标题变成"产能达成率 □ 80% 标准"。用 ASCII 连字符 `-` 即可。
+
+> 排查提示：`scripts/render_quadrant_chart.py` 刻意使用与 notebook **完全相同**的字体配置，
+> 就是为了让离线预览能暴露这类字体缺字形问题——不要把它换成字形更全的字体，那样会把问题掩盖掉。
