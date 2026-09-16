@@ -71,25 +71,28 @@ cd D:\data_warehouse_project
 # 1) 安装依赖
 pip install -r requirements.txt
 
-# 2) 全量重建源数据（会先清空源库 11 张表，约 40~90 分钟）
+# 2) 首次初始化：建 7 个库 + 全部分层表（幂等，可重复执行）
+mysql -uroot -p < sql\00_init_all.sql
+
+# 3) 全量重建源数据（会先清空源库 11 张表，约 40~90 分钟）
 python scripts\generate_fake_data.py
 
-# 3) 【仅源库全量重建后必须执行一次】清空 ODS + 重置增量水位
+# 4) 【仅源库全量重建后必须执行一次】清空 ODS + 重置增量水位
 #    用 MySQL 客户端执行 sql/06_etl_scripts/step00_ods_full_reset.sql
 #    否则 step01 会把新数据当增量追加，导致 ODS 翻倍
 
-# 4) 跑 ETL 全流程（step01~step05，约 20~30 分钟）
+# 5) 跑 ETL 全流程（step01~step05，约 20~30 分钟）
 python scripts\etl_scheduler.py --once
 
-# 5) 之后每天补增量（默认只生成"今天"）
+# 6) 之后每天补增量（默认只生成"今天"）
 python scripts\generate_incremental_data.py
 #    或回补区间缺口（已有数据的日期自动跳过）
 python scripts\generate_incremental_data.py 2026-07-01 2026-09-10
 
-# 6) FineBI：数据 → 分析主题 → 更新 → 浏览器 Ctrl+F5
+# 7) FineBI：数据 → 分析主题 → 更新 → 浏览器 Ctrl+F5
 ```
 
-> 注意：**只跑生成器不跑 ETL，看板不会变**；第 2 步会清空源表，请确认没有其他程序在读这三个库。
+> 注意：**只跑生成器不跑 ETL，看板不会变**；第 3 步会清空源表，请确认没有其他程序在读这三个库。
 
 ---
 

@@ -312,7 +312,7 @@ ORDER BY s.stock_amt DESC
 LIMIT 50;
 
 -- 11.4 营收缺口：最近一个完整月（当月有销售的天数 ≥ 20 天）
---      口径 = 「已取消订单金额」占「当月下单金额（含取消）」≥ 15% 的产品。
+--      口径 = 「已取消订单金额」占「当月下单金额（含取消）」≥ 12% 的产品（基础取消率约 10%，12% 即高出 2 个点）。
 --      说明：模拟数据里各产品营收同涨同跌（产品/客户/区域三级环比下滑均为 0 个），
 --            用「营收环比下滑」口径会恒为空，因此采用「取消订单造成的营收缺口」；
 --            若后续补充月度目标表，可改为「实际营收 < 目标 × 80%」。
@@ -325,7 +325,7 @@ SELECT
     COALESCE(p.product_name, t.product_id),
     t.product_id,
     CONCAT(ROUND(t.gap_amt, 2), ' 元'),
-    '取消率 15%',
+    '取消率 12%',
     CONCAT(
         COALESCE(p.product_name, t.product_id), ' ', t.stat_month, ' 取消订单金额 ', ROUND(t.gap_amt, 2),
         ' 元，占当月下单金额 ', ROUND(t.cancel_rate, 2), '%（下单 ',
@@ -355,7 +355,7 @@ FROM (
     GROUP BY DATE_FORMAT(order_date, '%Y-%m'), product_id
 ) t
 LEFT JOIN dwd_db.dim_product p ON t.product_id = p.product_id
-WHERE t.cancel_rate >= 15
+WHERE t.cancel_rate >= 12
 ORDER BY t.gap_amt DESC
 LIMIT 30;
 
