@@ -83,6 +83,14 @@ COMMIT_PER_STATEMENT = True
 
 LOG_DIR = "logs"
 
+# 跑批前自检：sql/00_init_all.sql 是否与 sql/01~05 各层 DDL 同步
+# ------------------------------------------------------------
+# 说明：00_init_all.sql 是生成物（由 scripts/build_init_sql.py 生成）。
+#       改了分层 DDL 忘了重新生成时，这里会提醒，但**只提醒、不阻断**——
+#       表早就建好了，同步与否不影响本次跑批。
+#       用 --skip-init-check 可跳过；用 python scripts/build_init_sql.py 重新生成。
+CHECK_INIT_SQL = True
+
 # ============================================================
 # 二、日志模块
 # ============================================================
@@ -330,9 +338,31 @@ def run_etl_step(step_name: str, sql_path: str,
     return False
 
 
+def check_init_sql_sync() -> bool:
+    """
+    跑批前自检：sql/00_init_all.sql 是否与各层 DDL 同步。
+
+    返回是否同步。任何异常都视为"跳过自检"，绝不因此影响 ETL。
+    """
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import build_init_sql
+        ok, msg = build_init_sql.check()
+        if ok:
+            logger.info(f"✅ 建表脚本自检：{msg}")
+        else:
+            logger.warning(f"⚠️ 建表脚本自检：{msg}")
+            logger.warning("   （不影响本次 ETL，仅提示同步一下；--skip-init-check 可关闭自检）")
+        return ok
+    except Exception as e:
+        logger.warning(f"⚠️ 建表脚本自检跳过（{e}）")
+        return True
+
+
 def run_etl_pipeline(max_retries: int = MAX_RETRIES,
                      retry_interval: int = RETRY_INTERVAL,
-                     continue_on_error: bool = CONTINUE_ON_ERROR) -> bool:
+                     continue_on_error: bool = CONTINUE_ON_ERROR,
+                     check_init: bool = CHECK_INIT_SQL) -> bool:
     """
     执行完整 ETL 流水线。
     返回: 流水线是否全部成功
@@ -341,6 +371,10 @@ def run_etl_pipeline(max_retries: int = MAX_RETRIES,
     logger.info("🚀 ETL 流水线开始执行")
     logger.info(f"⏰ 开始时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 60)
+
+    # 跑批前自检（只提醒，不阻断）
+    if check_init:
+        check_init_sql_sync()
 
     start_time = time.time()
     failed_steps: List[str] = []
@@ -374,7 +408,8 @@ def run_etl_pipeline(max_retries: int = MAX_RETRIES,
 # 七、调度器配置
 # ============================================================
 
-def run_scheduler(schedule_time: str, max_retries: int, retry_interval: int):
+def run_scheduler(schedule_time: str, max_retries: int, retry_interval: int,
+                  check_init: bool = CHECK_INIT_SQL):
     """启动常驻调度器：先立即跑一次，再按每日 schedule_time 定时执行。"""
     logger.info("=" * 60)
     logger.info("⏰ ETL 调度器启动")
@@ -388,12 +423,13 @@ def run_scheduler(schedule_time: str, max_retries: int, retry_interval: int):
 
     # 设置定时任务
     schedule.every().day.at(schedule_time).do(
-        run_etl_pipeline, max_retries, retry_interval, CONTINUE_ON_ERROR
+        run_etl_pipeline, max_retries, retry_interval, CONTINUE_ON_ERROR, check_init
     )
 
     # 立即执行一次（用于测试/首次启动补数）
     logger.info("🧪 立即执行一次 ETL（测试模式）...")
-    run_etl_pipeline(max_retries=max_retries, retry_interval=retry_interval)
+    run_etl_pipeline(max_retries=max_retries, retry_interval=retry_interval,
+                     check_init=check_init)
 
     # 进入调度循环
     logger.info(f"⏳ 等待下一个调度时间: {schedule_time}")
@@ -419,6 +455,8 @@ def parse_args():
     parser.add_argument('--continue-on-error', action='store_true',
                         help='某一步失败后继续执行后续步骤（默认失败即中断）')
     parser.add_argument('--log-dir', default=LOG_DIR, help=f'日志目录，默认 {LOG_DIR}')
+    parser.add_argument('--skip-init-check', action='store_true',
+                        help='跳过"建表脚本是否同步"自检（默认会自检并提醒，不阻断）')
     return parser.parse_args()
 
 
@@ -433,11 +471,13 @@ if __name__ == "__main__":
             max_retries=args.max_retries,
             retry_interval=args.retry_interval,
             continue_on_error=args.continue_on_error,
+            check_init=not args.skip_init_check,
         )
         sys.exit(0 if ok else 1)
     else:
         try:
-            run_scheduler(args.time, args.max_retries, args.retry_interval)
+            run_scheduler(args.time, args.max_retries, args.retry_interval,
+                          check_init=not args.skip_init_check)
         except KeyboardInterrupt:
             logger.info("🛑 调度器已停止")
             sys.exit(0)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-00_init_all.sql 生成器
+00_init_all.sql 生成器 / 同步校验
 ====================================================
 作用：把 sql/01~05 各层的建表脚本，拼成一份「一键初始化」脚本
       sql/00_init_all.sql（建 7 个库 + 全部表）。
@@ -9,7 +9,7 @@
 为什么要有它：
     sql/01~05 里的分层 DDL 才是**唯一数据源**；00_init_all.sql 只是产物。
     改了分层 DDL 后跑一下本脚本重新生成即可，避免两者悄悄漂移
-    （--check 模式可用来检查是否忘了同步）。
+    （--check 模式可用来检查是否忘了同步，也可被 etl_scheduler 调用）。
 
 用法：
     python scripts/build_init_sql.py            # 生成 / 更新 sql/00_init_all.sql
@@ -45,6 +45,11 @@ def read_text(path):
     """读文本并统一成 LF 换行。"""
     with io.open(path, encoding='utf-8') as f:
         return f.read().replace('\r\n', '\n').replace('\r', '\n')
+
+
+def project_root():
+    """项目根目录（本脚本在 scripts/ 下）。"""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def build(root):
@@ -86,6 +91,31 @@ def build(root):
     return '\n'.join(out) + '\n', stats
 
 
+def check(root=None, out_path=None):
+    """
+    校验 00_init_all.sql 是否与各层 DDL 同步。
+
+    返回 (是否同步: bool, 说明文本: str)
+    这个函数同时被命令行 --check 和 etl_scheduler 的跑批前自检复用。
+    """
+    root = root or project_root()
+    out_path = out_path or os.path.join(root, DEFAULT_OUT)
+    rel = os.path.relpath(out_path, root)
+
+    content, stats = build(root)
+    total = sum(n for _, n in stats)
+
+    if not os.path.exists(out_path):
+        return False, '%s 不存在，请运行：python scripts/build_init_sql.py' % rel
+
+    if read_text(out_path) == content:
+        return True, '%s 与各层 DDL 一致（%d 张表）' % (rel, total)
+
+    old_l, new_l = read_text(out_path).splitlines(), content.splitlines()
+    diff = sum(1 for a, b in zip(old_l, new_l) if a != b) + abs(len(old_l) - len(new_l))
+    return False, '%s 与各层 DDL 不一致（约 %d 行差异），请运行：python scripts/build_init_sql.py' % (rel, diff)
+
+
 def main():
     ap = argparse.ArgumentParser(description='生成 / 校验 sql/00_init_all.sql')
     ap.add_argument('--check', action='store_true',
@@ -93,37 +123,25 @@ def main():
     ap.add_argument('--out', default=None, help='输出路径，默认 sql/00_init_all.sql')
     args = ap.parse_args()
 
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    root = project_root()
     out_path = args.out or DEFAULT_OUT
     if not os.path.isabs(out_path):
         out_path = os.path.join(root, out_path)
-    rel_out = os.path.relpath(out_path, root)
-
-    content, stats = build(root)
-    total = sum(n for _, n in stats)
 
     # ---- 校验模式：只比内容，不写盘 ----
     if args.check:
-        if not os.path.exists(out_path):
-            print('[不同步] %s 不存在，请运行：python scripts/build_init_sql.py' % rel_out)
-            return 1
-        old = read_text(out_path)
-        if old == content:
-            print('[同步] %s 与各层 DDL 一致（%d 张表）' % (rel_out, total))
-            return 0
-        old_l, new_l = old.splitlines(), content.splitlines()
-        diff = sum(1 for a, b in zip(old_l, new_l) if a != b) + abs(len(old_l) - len(new_l))
-        print('[不同步] %s 与各层 DDL 不一致（约 %d 行差异）' % (rel_out, diff))
-        print('         请运行：python scripts/build_init_sql.py')
-        return 1
+        ok, msg = check(root, out_path)
+        print('[%s] %s' % ('同步' if ok else '不同步', msg))
+        return 0 if ok else 1
 
     # ---- 生成模式 ----
+    content, stats = build(root)
     with io.open(out_path, 'w', encoding='utf-8', newline='\n') as f:
         f.write(content)
-    print('已生成 %s' % rel_out)
+    print('已生成 %s' % os.path.relpath(out_path, root))
     for db, n in stats:
         print('  %-8s %2d 张表' % (db, n))
-    print('  合计 %d 张表' % total)
+    print('  合计 %d 张表' % sum(n for _, n in stats))
     return 0
 
 
