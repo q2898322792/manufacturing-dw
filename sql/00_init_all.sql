@@ -3,6 +3,9 @@
 -- 用法：mysql -uroot -p < 00_init_all.sql
 -- 幂等：CREATE DATABASE IF NOT EXISTS / DROP TABLE IF EXISTS 均可重复执行
 -- 说明：dim_date 只建空表，数据由 step02 按实际日期动态重建
+--
+-- ⚠️ 本文件由 scripts/build_init_sql.py 自动生成，请勿手改；
+--    改了 sql/01~05 里的建表脚本后，跑一下该脚本重新生成。
 -- ============================================================
 
 SET NAMES utf8mb4;
@@ -16,7 +19,7 @@ CREATE DATABASE IF NOT EXISTS dws_db DEFAULT CHARACTER SET utf8mb4 COLLATE utf8m
 CREATE DATABASE IF NOT EXISTS ads_db DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 
 -- ============================================================
--- erp_db
+-- erp_db（5 张表）
 -- ============================================================
 USE erp_db;
 
@@ -110,7 +113,7 @@ INDEX idx_order_status ( order_status )
 ) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = '销售订单事实表';
 
 -- ============================================================
--- mes_db
+-- mes_db（3 张表）
 -- ============================================================
 USE mes_db;
 
@@ -172,7 +175,7 @@ update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMME
 ) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = '车间维度表';
 
 -- ============================================================
--- wms_db
+-- wms_db（3 张表）
 -- ============================================================
 USE wms_db;
 
@@ -230,7 +233,7 @@ update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMME
 ) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = '供应商维度表';
 
 -- ============================================================
--- ods_db
+-- ods_db（11 张表）
 -- ============================================================
 USE ods_db;
 
@@ -423,7 +426,7 @@ etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间'
 ) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'ODS-供应商维度表';
 
 -- ============================================================
--- dwd_db
+-- dwd_db（13 张表）
 -- ============================================================
 USE dwd_db;
 
@@ -654,7 +657,7 @@ CREATE TABLE dwd_stock_snapshot (
 ) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'DWD-库存快照事实表（每日物料×仓库库存）';
 
 -- ============================================================
--- dws_db
+-- dws_db（5 张表）
 -- ============================================================
 USE dws_db;
 
@@ -759,7 +762,7 @@ INDEX idx_warehouse_id ( warehouse_id )
 ) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'DWS-库存日汇总表';
 
 -- ============================================================
--- ads_db
+-- ads_db（6 张表）
 -- ============================================================
 USE ads_db;
 

@@ -72,6 +72,10 @@ cd D:\data_warehouse_project
 pip install -r requirements.txt
 
 # 2) 首次初始化：建 7 个库 + 全部分层表（幂等，可重复执行）
+#    sql/00_init_all.sql 是产物，由各层 DDL 自动生成；
+#    改了 sql/01~05 里的建表脚本后要重新生成，否则两边会漂移：
+#      python scripts\build_init_sql.py            # 重新生成
+#      python scripts\build_init_sql.py --check    # 只校验是否同步（不同步退出码 1）
 mysql -uroot -p < sql\00_init_all.sql
 
 # 3) 全量重建源数据（会先清空源库 11 张表，约 40~90 分钟）
@@ -119,6 +123,21 @@ python scripts\generate_incremental_data.py 2026-07-01 2026-09-10
 | 5 | 库存健康 | ads_stock_health | 单日快照、呆滞预警 |
 | 6 | 成本利润分析 | ads_cost_profit | 月度毛利率 |
 | 7 | 异常预警清单 | ads_alert_warning | 五类预警 |
+
+---
+
+## 常用脚本
+
+| 脚本 | 作用 |
+|---|---|
+| `scripts/generate_fake_data.py` | 全量生成仿真源数据（会先清空 11 张源表，约 40~90 分钟） |
+| `scripts/generate_incremental_data.py` | 按天补增量（默认"今天"，也可传区间回补） |
+| `scripts/etl_scheduler.py --once` | 跑一次完整 ETL（step01~step05，约 20~30 分钟） |
+| `scripts/etl_scheduler.py` | 常驻调度：先跑一次，之后每天 02:00 跑 |
+| `scripts/build_init_sql.py` | 由各层 DDL 生成 `sql/00_init_all.sql`；`--check` 校验是否同步 |
+| `scripts/render_quadrant_chart.py` | 不开 Jupyter，离线重绘四象限图 PNG |
+
+> 所有脚本的数据库连接都读环境变量 `DB_HOST / DB_PORT / DB_USER / DB_PASSWORD`，默认 `root/root@localhost:3306`。
 
 ---
 
