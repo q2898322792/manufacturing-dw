@@ -91,6 +91,13 @@ LOG_DIR = "logs"
 #       用 --skip-init-check 可跳过；用 python scripts/build_init_sql.py 重新生成。
 CHECK_INIT_SQL = True
 
+# 跑完 ETL 后自动做数据校验（scripts/verify_data.py）：跨层对账、预警 5 类、维度孤儿等
+# ------------------------------------------------------------
+# 注意与上面的"建表脚本自检"区别：那一项只是提醒、不阻断；
+# 这一项**失败会让整批算失败**——ETL 跑完但数据不自洽，是真问题。
+#       用 --skip-verify 可跳过。
+VERIFY_AFTER_ETL = True
+
 # ============================================================
 # 二、日志模块
 # ============================================================
@@ -359,10 +366,31 @@ def check_init_sql_sync() -> bool:
         return True
 
 
+def verify_data_after_etl() -> bool:
+    """
+    跑完 ETL 后核对数据自洽性（scripts/verify_data.py）。
+
+    返回是否通过。校验脚本本身出错时视为"跳过"，不因此判整批失败。
+    """
+    logger.info("🔍 开始数据校验（scripts/verify_data.py）...")
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import verify_data
+        ok, lines = verify_data.run(quiet=False, printer=None)   # 先收集，再整段写日志
+        for ln in lines:
+            logger.info(ln)
+        logger.info("✅ 数据校验通过" if ok else "❌ 数据校验未通过（详见上方报告）")
+        return ok
+    except Exception as e:
+        logger.warning(f"⚠️ 数据校验跳过（{e}）")
+        return True
+
+
 def run_etl_pipeline(max_retries: int = MAX_RETRIES,
                      retry_interval: int = RETRY_INTERVAL,
                      continue_on_error: bool = CONTINUE_ON_ERROR,
-                     check_init: bool = CHECK_INIT_SQL) -> bool:
+                     check_init: bool = CHECK_INIT_SQL,
+                     verify_after: bool = VERIFY_AFTER_ETL) -> bool:
     """
     执行完整 ETL 流水线。
     返回: 流水线是否全部成功
@@ -392,16 +420,26 @@ def run_etl_pipeline(max_retries: int = MAX_RETRIES,
             logger.info(f"📊 {step_name} 完成，耗时 {time.time() - step_start:.1f} 秒")
 
     elapsed = time.time() - start_time
+
+    # 跑完 step 后做数据校验（跨层对账 / 预警类型 / 维度孤儿…）
+    # 只在各步骤都成功时跑：步骤都失败了，数据本来就是坏的，再校验只是噪音。
+    verify_ok = True
+    if verify_after and not failed_steps:
+        verify_ok = verify_data_after_etl()
+
     logger.info("=" * 60)
     if failed_steps:
         logger.error("❌ ETL 流水线执行失败")
         logger.error(f"失败步骤: {', '.join(failed_steps)}")
         logger.error(f"⏱️ 总耗时: {elapsed:.2f} 秒")
+    elif not verify_ok:
+        logger.error("❌ ETL 各步骤均执行成功，但数据校验未通过（数据不自洽，按失败处理）")
+        logger.info(f"⏱️ 总耗时: {elapsed:.2f} 秒")
     else:
         logger.info("✅ ETL 流水线全部执行成功！")
         logger.info(f"⏱️ 总耗时: {elapsed:.2f} 秒")
     logger.info("=" * 60)
-    return not failed_steps
+    return not failed_steps and verify_ok
 
 
 # ============================================================
@@ -409,7 +447,8 @@ def run_etl_pipeline(max_retries: int = MAX_RETRIES,
 # ============================================================
 
 def run_scheduler(schedule_time: str, max_retries: int, retry_interval: int,
-                  check_init: bool = CHECK_INIT_SQL):
+                  check_init: bool = CHECK_INIT_SQL,
+                  verify_after: bool = VERIFY_AFTER_ETL):
     """启动常驻调度器：先立即跑一次，再按每日 schedule_time 定时执行。"""
     logger.info("=" * 60)
     logger.info("⏰ ETL 调度器启动")
@@ -423,13 +462,13 @@ def run_scheduler(schedule_time: str, max_retries: int, retry_interval: int,
 
     # 设置定时任务
     schedule.every().day.at(schedule_time).do(
-        run_etl_pipeline, max_retries, retry_interval, CONTINUE_ON_ERROR, check_init
+        run_etl_pipeline, max_retries, retry_interval, CONTINUE_ON_ERROR, check_init, verify_after
     )
 
     # 立即执行一次（用于测试/首次启动补数）
     logger.info("🧪 立即执行一次 ETL（测试模式）...")
     run_etl_pipeline(max_retries=max_retries, retry_interval=retry_interval,
-                     check_init=check_init)
+                     check_init=check_init, verify_after=verify_after)
 
     # 进入调度循环
     logger.info(f"⏳ 等待下一个调度时间: {schedule_time}")
@@ -457,6 +496,8 @@ def parse_args():
     parser.add_argument('--log-dir', default=LOG_DIR, help=f'日志目录，默认 {LOG_DIR}')
     parser.add_argument('--skip-init-check', action='store_true',
                         help='跳过"建表脚本是否同步"自检（默认会自检并提醒，不阻断）')
+    parser.add_argument('--skip-verify', action='store_true',
+                        help='跳过跑完后的数据校验（默认会校验，校验不过则整批算失败）')
     return parser.parse_args()
 
 
@@ -472,12 +513,14 @@ if __name__ == "__main__":
             retry_interval=args.retry_interval,
             continue_on_error=args.continue_on_error,
             check_init=not args.skip_init_check,
+            verify_after=not args.skip_verify,
         )
         sys.exit(0 if ok else 1)
     else:
         try:
             run_scheduler(args.time, args.max_retries, args.retry_interval,
-                          check_init=not args.skip_init_check)
+                          check_init=not args.skip_init_check,
+                          verify_after=not args.skip_verify)
         except KeyboardInterrupt:
             logger.info("🛑 调度器已停止")
             sys.exit(0)

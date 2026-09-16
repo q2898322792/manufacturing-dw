@@ -13,7 +13,9 @@
     python scripts/render_quadrant_chart.py
     产物：notebooks/bi/analysis/capacity_quality_quadrant.png
 
-注意：取数口径与 notebook 保持一致 —— ads_produce_monitor 按车间取均值。
+注意：取数口径与 notebook 保持一致 —— ads_produce_monitor 按车间做**加权**聚合
+      （SUM(actual_qty)/SUM(plan_qty)、SUM(qualified_qty)/SUM(actual_qty)），
+      不是 AVG(每行比率)。改了 notebook 的取数逻辑，记得同步改这里。
 """
 
 import os
@@ -61,11 +63,15 @@ def main():
         user=os.environ.get('DB_USER', 'root'),
         password=os.environ.get('DB_PASSWORD', 'root'),
         charset='utf8mb4')
-    df = pd.read_sql('SELECT stat_date, workshop_name, capacity_achieved, qualified_rate '
-                     'FROM ads_db.ads_produce_monitor', conn)
+    ws = pd.read_sql("""
+        SELECT workshop_name,
+               ROUND(SUM(actual_qty)    * 100.0 / NULLIF(SUM(plan_qty), 0),    2) AS capacity_achieved,
+               ROUND(SUM(qualified_qty) * 100.0 / NULLIF(SUM(actual_qty), 0), 2) AS qualified_rate
+        FROM ads_db.ads_produce_monitor
+        GROUP BY workshop_name
+    """, conn).set_index('workshop_name')
     conn.close()
 
-    ws = df.groupby('workshop_name')[['capacity_achieved', 'qualified_rate']].mean().round(2)
     ws['产能距标准'] = (ws['capacity_achieved'] - CAP_STD).round(2)
     ws['良率距标准'] = (ws['qualified_rate'] - QUAL_STD).round(2)
     ws['象限'] = ws.apply(classify_quadrant, axis=1)

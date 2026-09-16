@@ -132,16 +132,17 @@ python scripts\generate_incremental_data.py 2026-07-01 2026-09-10
 |---|---|
 | `scripts/generate_fake_data.py` | 全量生成仿真源数据（会先清空 11 张源表，约 40~90 分钟） |
 | `scripts/generate_incremental_data.py` | 按天补增量（默认"今天"，也可传区间回补） |
-| `scripts/etl_scheduler.py --once` | 跑一次完整 ETL（step01~step05，约 20~30 分钟）；**跑前自动自检建表脚本是否同步** |
+| `scripts/etl_scheduler.py --once` | 跑一次完整 ETL（step01~step05，约 20~30 分钟）；**跑前自检建表脚本、跑后自动数据校验** |
 | `scripts/etl_scheduler.py` | 常驻调度：先跑一次，之后每天 02:00 跑 |
+| `scripts/verify_data.py` | 数据校验：跨层对账、预警 5 类、维度孤儿等 19 项断言；全通过退出码 0 |
 | `scripts/build_init_sql.py` | 由各层 DDL 生成 `sql/00_init_all.sql`；`--check` 校验是否同步 |
 | `scripts/render_quadrant_chart.py` | 不开 Jupyter，离线重绘四象限图 PNG |
 
 > 所有脚本的数据库连接都读环境变量 `DB_HOST / DB_PORT / DB_USER / DB_PASSWORD`，默认 `root/root@localhost:3306`。
 
-> **建表脚本自检**：每次跑 ETL 前会自动调用 `build_init_sql.check()`，检查 `sql/00_init_all.sql` 是否与 `sql/01~05` 各层 DDL 一致。
-> 不一致时**只打警告、不阻断跑批**（表早已建好，同步与否不影响本次 ETL），提示你跑一下 `python scripts\build_init_sql.py`。
-> 想跳过自检加 `--skip-init-check`。
+> **跑批前后的两道自检**（`etl_scheduler.py` 自动带上）：
+> - **跑前** `build_init_sql.check()`：检查 `sql/00_init_all.sql` 是否与 `sql/01~05` 各层 DDL 同步 —— **只打警告、不阻断**（表早已建好，不影响跑批）。跳过用 `--skip-init-check`
+> - **跑后** `verify_data.run()`：核对数据是否自洽（营收/产量跨层对账、预警 5 类齐全、维度无孤儿、大屏逐日无断层…）—— **不过则整批算失败**（跑完了但数据不自洽是真问题）。跳过用 `--skip-verify`
 
 ---
 
