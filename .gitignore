@@ -22,3 +22,6 @@ bl/*.pdf
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ---- 编辑器本地配置（VS Code 自动生成）----
+.vscode/
