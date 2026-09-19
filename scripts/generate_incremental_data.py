@@ -15,6 +15,12 @@
 运行方式：
     python generate_incremental_data.py                          # 只生成"今天"一天（配合每日调度）
     python generate_incremental_data.py 2026-07-01 2026-09-10    # 补齐区间，已有数据的日期自动跳过
+
+幂等说明（2026-09-18 修复）：
+    早期版本只用 erp_db.sale_order 判断"这天是否已生成"，而各源表的日期覆盖并不一致
+    （库存快照/出入库比销售多铺了一个月），导致 7 月被重复生成、库存快照撞唯一键报 1062、
+    出入库流水被写两遍。现在改为**逐表判断 + 单步隔离 + 每步独立提交**，
+    重复执行只会补齐缺失的表，不会再产生重复数据。
 """
 
 import os
@@ -166,18 +172,37 @@ print(f"✅ 按历史日均推算增量规模：销售订单 {DAILY_SALE_ORDERS}
 # ============================================================
 
 def batch_insert(sql, data_list, batch_size=2000):
-    """批量插入（批大小从 1000 提到 2000，并减少逐条打印）"""
+    """批量插入（**不提交**，由调用方在整批成功后统一 commit）
+
+    为什么要去掉内部 commit：
+        原来每批 commit 一次，等于把"一天"拆成多个事务。中途失败时
+        rollback() 只能回滚最后一批，前面已提交的数据留在库里 →
+        出现"半截天"（销售写完了、库存没写），而且外层 rollback 形同虚设。
+        2026-09-18 的重复插入事故就是在这个前提下被放大的。
+    """
     for i in range(0, len(data_list), batch_size):
-        batch = data_list[i:i + batch_size]
-        cursor.executemany(sql, batch)
-        conn.commit()
+        cursor.executemany(sql, data_list[i:i + batch_size])
     print(f"  已插入 {len(data_list)} 条")
 
 
-def date_has_data(target_date):
-    """判断该日期是否已经生成过数据，避免回补时重复写入"""
-    cursor.execute("SELECT COUNT(*) FROM erp_db.sale_order WHERE order_date = %s", (target_date,))
-    return cursor.fetchone()[0] > 0
+def table_date_count(table, date_col, target_date):
+    """该表在指定业务日期已有多少行（按表判断，而不是只看销售订单）"""
+    cursor.execute("SELECT COUNT(*) FROM %s WHERE %s = %%s" % (table, date_col), (target_date,))
+    return cursor.fetchone()[0]
+
+
+# 各源表 → 业务日期列（用于逐表幂等判断）
+DATE_GUARDS = {
+    'sale': ('erp_db.sale_order', 'order_date'),
+    'workorder': ('mes_db.produce_workorder', 'plan_start_date'),
+    'stock': ('wms_db.stock_snapshot', 'snapshot_date'),
+    'equipment': ('mes_db.equipment_runtime', 'record_date'),
+}
+
+
+def day_is_complete(target_date):
+    """这一天是否 4 张按日源表都已齐备（成本凭证按月判断，单列在生成函数里）"""
+    return all(table_date_count(t, c, target_date) > 0 for t, c in DATE_GUARDS.values())
 
 
 # ============================================================
@@ -186,6 +211,9 @@ def date_has_data(target_date):
 
 def generate_incremental_sale_orders(target_date):
     """生成指定日期的增量销售订单（单价 = 产品标准售价，数量含季节波动）"""
+    if table_date_count('erp_db.sale_order', 'order_date', target_date):
+        print(f"\n⏭️  {target_date} 销售订单已有数据，跳过")
+        return
     print(f"\n📋 生成 {target_date} 的销售订单...")
     sql = """
         INSERT INTO erp_db.sale_order 
@@ -258,11 +286,24 @@ def generate_incremental_sale_orders(target_date):
         ))
 
     batch_insert(sql, data)
+    conn.commit()
     print(f"  ✅ 销售订单增量完成：{len(data)} 条")
 
 
 def generate_incremental_workorders(target_date):
-    """生成指定日期的增量生产工单，返回当天的工单明细（供成本凭证使用）"""
+    """生成指定日期的增量生产工单，返回当天的工单明细（供成本凭证使用）
+
+    注意：跳过生成时也要把**已有工单**返回，否则成本凭证会因为拿到空列表而漏生成。
+    """
+    cursor.execute("""
+        SELECT workorder_id, product_id, workshop_id, actual_qty
+        FROM mes_db.produce_workorder WHERE plan_start_date = %s
+    """, (target_date,))
+    existing = list(cursor.fetchall())
+    if existing:
+        print(f"\n⏭️  {target_date} 生产工单已有 {len(existing)} 条，跳过生成")
+        return existing
+
     print(f"\n📋 生成 {target_date} 的生产工单...")
     sql = """
         INSERT INTO mes_db.produce_workorder 
@@ -316,6 +357,7 @@ def generate_incremental_workorders(target_date):
         created.append((workorder_id, product_id, workshop_id, max(0, actual_qty)))
 
     batch_insert(sql, data)
+    conn.commit()
     print(f"  ✅ 生产工单增量完成：{len(data)} 条")
     return created
 
@@ -326,6 +368,18 @@ def generate_incremental_cost_voucher(target_date, workorders):
     原实现完全没有这一步，导致成本利润看板的数据永远停在初始区间。
     """
     print(f"\n📋 生成 {target_date} 的成本凭证...")
+
+    # 幂等判断：成本凭证只有 cost_month（无日期列），所以按"当天工单是否都已挂凭证"判断，
+    # 而不是按月判断——否则回补月中某几天时会整月漏掉。
+    cursor.execute("""
+        SELECT COUNT(*) FROM mes_db.produce_workorder w
+        LEFT JOIN erp_db.cost_voucher v ON v.workorder_id = w.workorder_id
+        WHERE w.plan_start_date = %s AND v.voucher_id IS NULL
+    """, (target_date,))
+    if cursor.fetchone()[0] == 0:
+        print(f"  ⏭️  {target_date} 的成本凭证已齐备，跳过")
+        return
+
     sql = """
         INSERT INTO erp_db.cost_voucher 
         (voucher_id, product_id, workshop_id, workorder_id, material_cost, labor_cost, mfg_cost, total_cost, cost_month)
@@ -356,6 +410,7 @@ def generate_incremental_cost_voucher(target_date, workorders):
         return
 
     batch_insert(sql, data)
+    conn.commit()
     print(f"  ✅ 成本凭证增量完成：{len(data)} 条")
 
 
@@ -364,8 +419,30 @@ def generate_incremental_stock(target_date):
 
     原实现只生成出入库流水，不生成快照，导致库存看板永远停在初始区间；
     而且出入库是纯随机数，与结存无关，周转天数没有业务含义。
+
+    ⚠️ 幂等（2026-09-18 修复）：本函数原来是"先插流水、再插快照"，
+       而 stock_snapshot 上有唯一键 uk_material_warehouse_date(material_id,
+       warehouse_id, snapshot_date)。当目标日期的快照**已存在**时（例如源库
+       全量生成时把快照日期多铺了一个月，而销售订单只到上月底），
+       快照插入必然报 1062 Duplicate entry；更糟的是流水已经提交，
+       于是一天被写了两遍（出入库翻倍），而 rollback 也救不回来。
+       现在改为：
+         1) 目标日期已有快照 → 整个步骤跳过（历史数据保持原样）；
+         2) 目标日期已有流水但缺快照 → 只补快照，并按已有流水的净变化推导结存；
+         3) 其余情况才正常生成。
     """
-    print(f"\n📋 生成 {target_date} 的出入库 + 库存快照...")
+    # ---- 幂等判断 1：快照已存在，什么都不做 ----
+    if table_date_count('wms_db.stock_snapshot', 'snapshot_date', target_date):
+        print(f"\n⏭️  {target_date} 库存快照已存在，跳过出入库 + 快照"
+              f"（避免 uk_material_warehouse_date 冲突与流水翻倍）")
+        return
+
+    io_exists = table_date_count('wms_db.stock_io_detail', 'io_date', target_date) > 0
+    if io_exists:
+        print(f"\n📋 {target_date} 出入库流水已存在，仅补齐库存快照...")
+    else:
+        print(f"\n📋 生成 {target_date} 的出入库 + 库存快照...")
+
     io_sql = """
         INSERT INTO wms_db.stock_io_detail 
         (io_id, material_id, warehouse_id, io_type, io_qty, io_amount, 
@@ -388,6 +465,37 @@ def generate_incremental_stock(target_date):
     """, (target_date,))
     opening = {(m, w): q for m, w, q in cursor.fetchall()}
 
+    now = datetime.datetime.now()
+
+    # ---- 幂等判断 2：流水已在、只缺快照 → 用已有流水的净变化推导当日结存 ----
+    if io_exists:
+        cursor.execute("""
+            SELECT material_id, warehouse_id,
+                   SUM(CASE WHEN io_type = 'IN'  THEN io_qty ELSE 0 END)
+                 - SUM(CASE WHEN io_type = 'OUT' THEN io_qty ELSE 0 END) AS delta
+            FROM wms_db.stock_io_detail
+            WHERE io_date = %s
+            GROUP BY material_id, warehouse_id
+        """, (target_date,))
+        delta = {(m, w): d for m, w, d in cursor.fetchall()}
+
+        snap_rows = []
+        for material_id in material_ids:
+            price = material_unit_price(material_id)
+            for warehouse_id in WAREHOUSES:
+                key = (material_id, warehouse_id)
+                qty_on_hand = opening.get(key, random.randint(50, 800)) + delta.get(key, 0)
+                qty_on_hand = max(0, qty_on_hand)
+                snap_rows.append((
+                    fake.uuid4().replace('-', '')[:32],
+                    material_id, warehouse_id, target_date,
+                    qty_on_hand, round(qty_on_hand * price, 2), now, now
+                ))
+        batch_insert(snap_sql, snap_rows)
+        conn.commit()
+        print(f"  ✅ 仅补库存快照 {len(snap_rows)} 条（流水未改动）")
+        return
+
     # 取当天已存在的工单/订单，用于把出入库挂到业务单据上
     cursor.execute("SELECT workorder_id FROM mes_db.produce_workorder WHERE plan_start_date = %s", (target_date,))
     today_workorders = [r[0] for r in cursor.fetchall()]
@@ -395,7 +503,6 @@ def generate_incremental_stock(target_date):
     today_orders = [r[0] for r in cursor.fetchall()]
 
     io_rows, snap_rows = [], []
-    now = datetime.datetime.now()
 
     for material_id in material_ids:
         for warehouse_id in WAREHOUSES:
@@ -438,12 +545,17 @@ def generate_incremental_stock(target_date):
             ))
 
     batch_insert(io_sql, io_rows)
+    conn.commit()
     batch_insert(snap_sql, snap_rows)
+    conn.commit()
     print(f"  ✅ 出入库 {len(io_rows)} 条，库存快照 {len(snap_rows)} 条")
 
 
 def generate_incremental_equipment(target_date):
     """生成指定日期的增量设备运行记录"""
+    if table_date_count('mes_db.equipment_runtime', 'record_date', target_date):
+        print(f"\n⏭️  {target_date} 设备运行已有数据，跳过")
+        return
     print(f"\n📋 生成 {target_date} 的设备运行记录...")
     sql = """
         INSERT INTO mes_db.equipment_runtime 
@@ -474,6 +586,7 @@ def generate_incremental_equipment(target_date):
         ))
 
     batch_insert(sql, data)
+    conn.commit()
     print(f"  ✅ 设备运行增量完成：{len(data)} 条")
 
 
@@ -482,7 +595,16 @@ def generate_incremental_equipment(target_date):
 # ============================================================
 
 def generate_incremental_data(start_date, end_date):
-    """按天生成增量数据（已有数据的日期自动跳过，支持区间回补）"""
+    """按天生成增量数据（**逐表判断**是否已有数据，支持区间回补与断点续跑）
+
+    与旧实现的区别：旧版只用 erp_db.sale_order 一个表作为"这天是否已生成"的判据。
+    源库全量生成时把库存快照多铺了一个月（到 2026-07-31）而销售只到 2026-06-30，
+    于是 7 月被判定为"没有数据"→ 重复生成 → 库存快照撞唯一键报 1062、
+    出入库流水被写了两遍。现在改为：
+      · 逐表幂等：每张源表按自己的业务日期列判断，缺哪张补哪张；
+      · 单步隔离：某一步失败不再连累后面的步骤（旧版库存失败导致设备永远不生成）；
+      · 失败不丢现场：失败只回滚该步，已提交的步骤保持不动，重跑可继续补齐。
+    """
     total_days = (end_date - start_date).days + 1
     print("=" * 60)
     print(f"🚀 开始生成增量数据")
@@ -490,11 +612,11 @@ def generate_incremental_data(start_date, end_date):
     print(f"📊 每天约 {DAILY_SALE_ORDERS + DAILY_WORKORDERS + len(material_ids) * len(WAREHOUSES) * 2} 条数据")
     print("=" * 60)
 
-    skipped, done = 0, 0
+    skipped, done, failed = 0, 0, []
     current_date = start_date
     while current_date <= end_date:
-        if date_has_data(current_date):
-            print(f"\n⏭️  {current_date} 已有数据，跳过（避免重复累加）")
+        if day_is_complete(current_date):
+            print(f"\n⏭️  {current_date} 四张按日源表均已有数据，跳过")
             skipped += 1
             current_date += datetime.timedelta(days=1)
             continue
@@ -503,26 +625,34 @@ def generate_incremental_data(start_date, end_date):
         print(f"📅 正在处理: {current_date}")
         print("=" * 60)
 
-        try:
-            generate_incremental_sale_orders(current_date)
-            today_workorders = generate_incremental_workorders(current_date)
-            generate_incremental_cost_voucher(current_date, today_workorders)
-            generate_incremental_stock(current_date)
-            generate_incremental_equipment(current_date)
+        def step(label, fn, *args):
+            """单步执行：失败只回滚本步，不影响其它步骤"""
+            try:
+                return fn(*args)
+            except Exception as e:
+                conn.rollback()
+                failed.append((current_date, label, str(e)))
+                print(f"  ❌ {label} 失败: {e}")
+                return None
 
-            conn.commit()
-            done += 1
-            print(f"✅ {current_date} 增量数据生成完成")
+        step('销售订单', generate_incremental_sale_orders, current_date)
+        today_workorders = step('生产工单', generate_incremental_workorders, current_date) or []
+        step('成本凭证', generate_incremental_cost_voucher, current_date, today_workorders)
+        step('出入库+快照', generate_incremental_stock, current_date)
+        step('设备运行', generate_incremental_equipment, current_date)
 
-        except Exception as e:
-            print(f"❌ {current_date} 生成失败: {e}")
-            conn.rollback()
-
+        done += 1
+        print(f"✅ {current_date} 处理完成")
         current_date += datetime.timedelta(days=1)
 
     print("\n" + "=" * 60)
-    print(f"🎉 增量数据生成完成！成功 {done} 天，跳过 {skipped} 天")
+    print(f"🎉 增量数据生成完成！处理 {done} 天，跳过 {skipped} 天，失败 {len(failed)} 项")
+    if failed:
+        print("失败明细：")
+        for d, label, msg in failed:
+            print(f"   {d}  {label}  {msg}")
     print("=" * 60)
+    return failed
 
 
 # ============================================================
