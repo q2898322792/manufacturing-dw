@@ -13,7 +13,7 @@
 | ETL 全流程 | **26.6 分钟**（step01~step05，实测 1,595 秒） |
 | 数据校验 | `verify_data.py` **19 项断言**，全通过退出码 0 |
 
-![经营总览大屏](docs/screenshots/01-boss-dashboard.png)
+![经营总览大屏](https://cdn.jsdelivr.net/gh/q2898322792/manufacturing-dw@main/docs/screenshots/01-boss-dashboard.png)
 
 ---
 
@@ -210,31 +210,31 @@ data_warehouse_project/
 
 **1. 经营总览大屏** · 逐日快照，KPI 卡绑定「最新日期」
 
-![经营总览大屏](docs/screenshots/01-boss-dashboard.png)
+![经营总览大屏](https://cdn.jsdelivr.net/gh/q2898322792/manufacturing-dw@main/docs/screenshots/01-boss-dashboard.png)
 
 **2. 销售分析** · 客户 / 产品 / 区域多维
 
-![销售分析](docs/screenshots/02-sale-analysis.png)
+![销售分析](https://cdn.jsdelivr.net/gh/q2898322792/manufacturing-dw@main/docs/screenshots/02-sale-analysis.png)
 
 **3. 生产监控** · 产能达成率、良品率
 
-![生产监控](docs/screenshots/03-produce-monitor.png)
+![生产监控](https://cdn.jsdelivr.net/gh/q2898322792/manufacturing-dw@main/docs/screenshots/03-produce-monitor.png)
 
 **4. 生产四象限** · 车间产能 × 良率
 
-![生产四象限](docs/screenshots/04-produce-quadrant.png)
+![生产四象限](https://cdn.jsdelivr.net/gh/q2898322792/manufacturing-dw@main/docs/screenshots/04-produce-quadrant.png)
 
 **5. 库存健康** · 单日快照、呆滞预警
 
-![库存健康](docs/screenshots/05-stock-health.png)
+![库存健康](https://cdn.jsdelivr.net/gh/q2898322792/manufacturing-dw@main/docs/screenshots/05-stock-health.png)
 
 **6. 成本利润分析** · 月度毛利率
 
-![成本利润分析](docs/screenshots/06-cost-profit.png)
+![成本利润分析](https://cdn.jsdelivr.net/gh/q2898322792/manufacturing-dw@main/docs/screenshots/06-cost-profit.png)
 
 **7. 异常预警清单** · 五类预警
 
-![异常预警清单](docs/screenshots/07-alert-warning.png)
+![异常预警清单](https://cdn.jsdelivr.net/gh/q2898322792/manufacturing-dw@main/docs/screenshots/07-alert-warning.png)
 
 </details>
 
