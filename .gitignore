@@ -25,3 +25,12 @@ desktop.ini
 
 # ---- 编辑器本地配置（VS Code 自动生成）----
 .vscode/
+
+# ---- Agent 工作记忆（WorkBuddy 等工具的本地日志；本地保留，不进仓库）----
+.workbuddy/
+
+# ---- 临时/备份文件 ----
+*.bak
+*.bak-*
+*.orig
+*~
