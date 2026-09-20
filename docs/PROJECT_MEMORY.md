@@ -116,12 +116,17 @@ generate_fake_data.py  →  sql/06_etl_scripts/step00_ods_full_reset.sql  →  e
    注意 `UNKNOWN` 之类上游占位值**不算孤儿**，已列入白名单）。
 4. **`etl_scheduler.py: COMMIT_PER_STATEMENT = True`**：每条 SQL 单独提交。这是第三轮"disk full"事故的对策，
    **不要贸然改回整脚本单事务**（峰值 undo/binlog 会撑爆磁盘）。
-5. **`TRUNCATE` 隐式提交的原子性缺口 —— 已在 step03 修掉**：调度器是"整个脚本成功才 commit"，
-   原先 step03 开头 6 条 `TRUNCATE`（隐式提交、不可回滚），中途失败会留下**空表**。
-   现在 step03 改为 **`DELETE FROM ... WHERE <业务日期> BETWEEN @d1 AND @d2`**：
-   DELETE 是 DML、受事务保护，失败可整体回滚。
-   > ⚠️ 但 **step04 / step05 仍用 `TRUNCATE`**（它们重建 DWS/ADS，代价小、可从 DWD 重算），
-   > 这个缺口在那两步依然存在。要彻底解决得改成"写临时表 → 校验 → `RENAME` 原子切换"（见 §7）。
+5. **`TRUNCATE` 隐式提交的原子性缺口 —— 目前存在于 step03 / step04 / step05**：
+   调度器是"整个脚本成功才 commit"，而这 3 步的清理动作都是 **DDL（隐式提交、不可回滚）**：
+   - step03：`ALTER TABLE ... TRUNCATE PARTITION`（按分区增量）
+   - step04 / step05：`TRUNCATE TABLE`（DWS/ADS 全量重建）
+   → 若清理之后的 `INSERT` 失败，会留下**已清空的分区/表**。
+   
+   **缓解**：这 3 步都**幂等**，重跑即恢复。且 step04/05 的源（DWD）完好，可从 DWD 重算。
+   **彻底解决**要改成 `EXCHANGE PARTITION`（把算好的临时表原子换入分区）—— 见 §7。
+   > 历史沿革：曾短暂改成 `DELETE ... WHERE <日期> BETWEEN`（DML、可回滚），但实测
+   > **DELETE 43 万行要 151 秒**（比 INSERT 本身还贵），于是改回 `TRUNCATE PARTITION`（秒级）。
+   > 这是"原子性 vs 性能"的显式取舍，不是疏忽。
 6. **matplotlib 不要用 U+2212「−」（真减号）**：notebook 字体是 `SimHei`（GB2312 系），没有该字形，图上会显示成方框 `□`，用 ASCII `-`。
    `scripts/render_quadrant_chart.py` **刻意**与 notebook 使用完全相同的字体配置，就是为了让离线预览暴露这类字体问题——**别把它换成字形更全的字体**。
 7. **Jupyter 改完代码要 Restart & Run All**：历史上两次出现"新图被 Jupyter 内存里的旧代码覆盖"，
@@ -171,11 +176,19 @@ generate_fake_data.py  →  sql/06_etl_scripts/step00_ods_full_reset.sql  →  e
     - 分区列是 `'YYYY-MM'` 字符串的表只有 `dwd_cost_detail`（`cost_month`），
       字典序恰好等于时间序，可以直接当 `RANGE COLUMNS` 边界。
 
-13. **step03 是「按日增量」，不是全量**：
-    `区间 = [max(DWD 该表业务日期) − 45 天, max(ODS 该表业务日期)]`，`DELETE` + `INSERT`。
-    DWD 为空（首次 / 整表重建）时自动退化为"从 ODS 最小日期开始"= 全量。
-    45 天（`@lookback`）需大于历史最大缺口（历史最大 30 天）；
-    **若存在更大的历史缺口，把 `@lookback` 调大或先清表再跑**，否则会漏补。
+13. **step03 是「按分区增量」**：**按整月分区重算**，不用逐行 DELETE。
+    重算范围 = `[ODS 最大业务日期所在月的前一个月, ODS 最大业务日期所在月]`（2 个整月）。
+    清理用 `ALTER TABLE ... TRUNCATE PARTITION pA, pB`（**秒级**），再 `INSERT ... SELECT` 该区间。
+    DWD 为空（首次 / 整表重建）时自动切换为 `TRUNCATE TABLE` + 全量（用 `@dwd_max IS NULL` 判断）。
+
+    > **为什么不用 DELETE**：实测过 DELETE 版，增量 295.7 秒，其中 `DELETE 43 万行 ≈ 151 秒`
+    > （逐行标记删除 + 维护 13 棵分区索引 + undo/binlog），**比 INSERT 本身还贵**。
+    > 改成 `TRUNCATE PARTITION` 后增量 **101.4 秒（提速 2.9 倍，相对改造前全量 3.5 倍）**，6 张表行数零变化。
+
+    ⚠️ **注意两点**：
+    - `TRUNCATE PARTITION` 会清空**整个分区**，随后 INSERT 必须完整回填那 2 个月，否则丢数据
+    - 它是 DDL、隐式提交 → 见第 5 条的原子性说明（幂等，重跑可恢复）
+    - **历史缺口**：该设计只重算最近 2 个月，更早的历史缺口不会被自动补；需要补就手工清表重跑（会退化为全量）
 
 14. **维度 SCD Type 2 —— 规划中，尚未实施**（设计已定，见 §7）：
     前提已就绪：`generate_incremental_data.py` 的 `generate_incremental_dimension()`
