@@ -178,12 +178,10 @@ data_warehouse_project/
 ├── notebooks/               # Jupyter 分析（RFM、产能质量四象限）+ 输出图
 ├── docs/
 │   ├── PROJECT_MEMORY.md            # 项目记忆：口径决策、工程约定、故障复盘、未完成事项
-│   ├── 项目评估与优化路线图.md        # 面向简历的项目评估与优化路线
 │   └── screenshots/                 # 7 张看板截图（README 引用）
 ├── bl/                      # FineBI 看板导出的 PDF（已被 .gitignore 排除）
 ├── logs/                    # ETL 运行日志（已被 .gitignore 排除）
 ├── cleanup-c-drive.ps1      # 磁盘清理（清 MySQL binlog，防爆盘）
-├── AGENTS.md                # 给 coding agent 的仓库入口提示
 ├── requirements.txt
 └── 制造企业经营分析数据仓库项目说明书.docx    # 完整设计说明书（7 章）
 ```
@@ -308,8 +306,6 @@ data_warehouse_project/
 | MySQL `datadir` 在 C 盘，binlog 保留期未落盘配置 | **磁盘是系统性风险**（已出过一次事故） | 迁 `datadir` 到 D 盘；`binlog_expire_logs_seconds` 写进 `my.ini` |
 | 数据量 5.3 GB、单机 MySQL | 匹配不了「亿级 / 实时」类岗位 | 视目标岗位补充分区、OLAP 引擎（Doris/ClickHouse）或 CDC 实时链路 |
 
-> 完整的评估与三档优化路线（含简历写法建议）见 [`docs/项目评估与优化路线图.md`](./docs/项目评估与优化路线图.md)。
-
 ---
 
 ## 文档索引
@@ -319,5 +315,3 @@ data_warehouse_project/
 | [`制造企业经营分析数据仓库项目说明书.docx`](./制造企业经营分析数据仓库项目说明书.docx) | 完整设计说明书（7 章：需求 / 规模 / 架构 / 源系统对接 / 数据模型 / 指标口径） |
 | [`FineBI看板搭建步骤.md`](./FineBI看板搭建步骤.md) | FineBI 操作手册（表粒度铁律、7 个看板逐项、比率口径、导出截图、常见坑） |
 | [`docs/PROJECT_MEMORY.md`](./docs/PROJECT_MEMORY.md) | 项目记忆：口径决策、工程约定、故障复盘、未完成事项 |
-| [`docs/项目评估与优化路线图.md`](./docs/项目评估与优化路线图.md) | 项目评估与优化路线 |
-| [`AGENTS.md`](./AGENTS.md) | 给 coding agent 的仓库入口提示 |

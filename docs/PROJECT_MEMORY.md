@@ -1,13 +1,11 @@
 # 项目记忆 / 交接说明（PROJECT_MEMORY.md）
 
-> **这个文件是干什么的**：把"不在代码里"的项目知识——口径决策、踩过的坑、运维约束、未完成事项——写成仓库内的文件，
-> 让**任何** agent（DSH、WorkBuddy、Claude Code…）或人打开 `D:\data_warehouse_project` 就能接手，不依赖任何插件的记忆库。
+> **这个文件是干什么的**：把"不在代码里"的项目知识——口径决策、踩过的坑、运维约束、未完成事项——
+> 写成仓库内的文件，让接手的人打开 `D:\data_warehouse_project` 就能上手，不依赖任何工具的私有记忆。
 >
-> - 整理人：DSH（DeepSeek Harness）会话，2026-09-18
-> - 数据数字的实测日期：**2026-09-16**（用前请按 §6 复核）
 > - 依据来源：git 历史、`README.md`、`FineBI看板搭建步骤.md`，以及 ETL 脚本原文核对
-> - 2026-09-19 变更：原 `BI看板数据修正说明.md`（四轮追加式记录，含大量过期数字）已**合并进
->   `FineBI看板搭建步骤.md`** 并删除该文件；口径速查见其**附录 B**，本文档保留口径决策与故障复盘的完整版
+> - 历史沿革：原 `BI看板数据修正说明.md`（四轮追加式记录，含大量过期数字）已**合并进
+>   `FineBI看板搭建步骤.md`** 并删除；口径速查见其**附录 B**，本文档保留口径决策与故障复盘的完整版
 >
 > **建议阅读顺序**：`README.md`（怎么跑）→ 本文件（为什么这么做 / 有什么坑）→ `FineBI看板搭建步骤.md`（看板怎么搭）
 
@@ -158,7 +156,7 @@ generate_fake_data.py  →  sql/06_etl_scripts/step00_ods_full_reset.sql  →  e
 
 ## 5. 踩过的坑 / 故障复盘（都是真金白银）
 
-### 5.1 第三轮：ETL 报 `The table 'dwd_stock_io_detail' is full`（2026-09-10 22:xx）
+### 5.1 第三轮：ETL 报 `The table 'dwd_stock_io_detail' is full`
 
 **双重根因**：
 1. **C 盘被写满**：MySQL data 目录在 `C:\ProgramData\MySQL\...`，C 盘 200 GB 当时只剩 12.85 GB；
@@ -196,7 +194,7 @@ N+1 查询（50 万次单行 `SELECT` → 一次 load 成字典，这是整脚�
 
 ---
 
-### 5.6 第五轮：增量回补把 7 月出入库写了两遍（2026-09-18）
+### 5.6 第五轮：增量回补把 7 月出入库写了两遍
 
 **现象**：执行 `python scripts\generate_incremental_data.py 2026-07-01 <今天>` 回补缺口时，
 2026-07-03 起每天报
@@ -248,7 +246,7 @@ ODS 当时还没跑过 ETL，故 ODS 侧删除 0 行。
 
 
 
-## 6. 数据现状（**2026-09-18 实测（最新）** · 用前请复核）
+## 6. 数据现状（用前请复核）
 
 > 2026-09-18 完成了源数据回补（06-30 补缺、7~9 月增量、清理 7 月重复流水）并全量重跑 ETL，
 > **19 项断言全部通过，退出码 0**。上一轮（2026-09-16）数字见本节末尾对照。
@@ -348,13 +346,15 @@ python scripts\verify_data.py     # 19 项断言，全通过退出码 0；会打
    结构为：铁律 → 数据准备 → 从零搭组件 → 7 个看板逐项 → 比率口径 → 美化 → 验收 → 导出截图
    → 附录 A 常见坑 / 附录 B 数据口径速查 / 附录 C 数据现状。
    所有"对答案"数字已换成 **2026-09-18 实测**。**"历史故障复盘"只保留在本文件 §5**，不再双份维护。
-8. **交付物可见性（简历用途，见 `docs/项目评估与优化路线图.md` 档 A）** —— **进行中**：
-   - ✅ **看板截图已生成并接入 README**（2026-09-18）：`docs/screenshots/` 7 张 PNG，
-     统一 1434 px 宽、单张 84~288 KB、合计 1.35 MB；README 首屏放了「经营总览大屏」当门面，
-     另有独立的「看板截图」章节逐张展示。生成工具 `scripts/export_screenshots.py`。
-   - ✅ 数据是"活"的（到 2026-09-18），7 份 PDF 已按修正后的口径重新导出。
-   - ⬜ **待做**：`git gc --prune=now`（`.git` 57 MB → 预期 1~2 MB，见 §7.5）→ 建远程仓库 → push。
-   - ⬜ 待决：`README.txt`（`README.md` 的未跟踪副本，见 §7.2）与 `docs/` 是否一并纳入版本控制。
+8. **交付物可见性** —— ✅ **已完成**：
+   - ✅ **看板截图**：`docs/screenshots/` 7 张 PNG，统一 1434 px 宽、合计 1.35 MB；
+     README 首屏放「经营总览大屏」当门面，另用折叠区逐张展示。生成工具 `scripts/export_screenshots.py`
+   - ✅ 数据是"活"的（到 2026-09-18），7 份 PDF 已按修正后的口径重新导出
+   - ✅ `.git` 已 gc（**57 MB → 2.8 MB**）；远程仓库 `github.com/q2898322792/manufacturing-dw` 已 push
+   - ⚠️ **README 图片的加载链路**：GitHub 对**仓库内相对路径**渲染成 `github.com/.../raw/...`（302 →
+     `raw.githubusercontent.com`），对**外部绝对 URL**（如 jsDelivr）则包进 `camo.githubusercontent.com` ——
+     **两个都是 GitHub 域名**，在部分国内网络下不可达。现用 jsDelivr + camo，实测可用；
+     若访客仍看不到图，备选方案是推一份 Gitee 镜像
 9. **FineBI 侧的看板缺陷（2026-09-18 导出截图时发现）** ——
    数据侧 `verify_data.py` 19 项断言全过，问题都在 BI 配置上。
    **逐步操作已写入 `FineBI看板搭建步骤.md`**（§四 比率类指标正确做法 / §3.4 四象限 / 附录 A 常见坑）：
@@ -370,16 +370,9 @@ python scripts\verify_data.py     # 19 项断言，全通过退出码 0；会打
 
 ---
 
-## 8. 交接备注（工具 / 环境事实）
+## 8. 交接备注（环境事实）
 
-- **工作目录**：`D:\data_warehouse_project`（项目本体与工具无关，任何 agent 打开该目录即可接手）。
-- **原 DSH 会话历史不可迁移**：用户目录下 `.dsh\sessions\--D-data_warehouse_project--\` 有 9 个会话（jsonl 格式），
-  是 DSH 专属格式，WorkBuddy 等其它工具读不了 —— 所以"项目记忆"以本文件 + git 历史为准。
-- **Hindsight 记忆插件（`@vectorize-io/hindsight-coding-agents` v0.6.1）在 DSH 里已安装并启用，但未接通**：
-  用户目录下的 `.hindsight\coding-agent.json` 不存在、未配置 API token，所有调用返回 **401（API key required）**，
-  bank `coding-agent::data_warehouse_project` 里 **0 条知识页**。
-  **不要把"项目有记忆库"当成前提**；该插件的记忆是按仓库（bank 模板 `coding-agent::{gitProject}`）存在云端的，
-  官方支持的 harness 里**没有 WorkBuddy**（腾讯 CodeBuddy 内核）。
+- **工作目录**：`D:\data_warehouse_project`（项目本体与工具无关，任何人打开该目录即可接手）。
 - **环境近况**：MySQL data 目录在 C 盘（**C 盘空间是本项目最大的系统性风险**），FineBI 6.0 在 `localhost:37799`；
   项目里有 `cleanup-c-drive.ps1` 可用于清理 C 盘（清 MySQL binlog 等）。
 - **数据是仿真数据**，不是真实业务数据；口径以本文件 §3 为准，业务口径变更请**先改本文件再改 SQL**。
@@ -389,5 +382,5 @@ python scripts\verify_data.py     # 19 项断言，全通过退出码 0；会打
 ## 9. 维护本文件的约定
 
 - 口径、约定、踩坑、遗留项发生变化时**同步更新本文件**，不要只改代码或只改聊天记录。
-- 数字类内容一律标注"实测日期"，避免过期数字被后续 agent 当成事实。
+- 数字类内容一律标注"实测日期"，避免过期数字被当成事实。
 - 与本文件冲突时，优先级：**库内实测 > 代码注释 > 本文件 > 其它 md 文档**。
