@@ -37,6 +37,18 @@
 5. **幂等性重构** —— 定位并修复「按天回补把同一天写了两遍」的问题（流水表无业务唯一键 → 静默翻倍）。
    根因是幂等判据只看单表；改为**逐表按各自业务日期判断 + 单步隔离 + 提交粒度对齐步骤**。
 
+6. **事实表月度分区 + 按分区增量，实测提速 3.5 倍** —— DWD 的 6 张事实表按业务日期做
+   **月度 `RANGE` 分区**（16 个月度分区 + `pmax`），跑批只重算「最近 2 个整月」：
+   清理用 `TRUNCATE PARTITION`（元数据操作、秒级），再 `INSERT ... SELECT` 回填该区间。
+   实测 `step03` **355 秒 → 101.4 秒**，6 张表行数零变化、19 项校验全过。
+   > 中间踩过一次坑：先用 `DELETE ... WHERE <日期> BETWEEN` 做增量，实测 295.7 秒 ——
+   > 拆解后发现 **DELETE 43 万行就要 151 秒**（比 INSERT 本身还贵），才换成 `TRUNCATE PARTITION`。
+   > 已知取舍：它是 DDL、不可回滚，靠「幂等 + 重跑」兜底（详见 [已知不足](#已知不足与演进路线)）。
+
+7. **跑批前后四道自动检查**（都挂在调度器上，可单独关掉）——
+   分区维护（补齐未来月份）/ 磁盘剩余空间（不足则**中止**）/ 建表脚本同步（只警告）/
+   跑后数据校验（失败则整批失败）。另补上了 ODS 缺失的日期索引，相关查询提速 12~41 倍。
+
 ---
 
 ## 架构
@@ -246,8 +258,9 @@ data_warehouse_project/
 | `generate_incremental_data.py` | 按天补增量（默认「今天」，也可传区间回补；**逐表幂等**） |
 | `etl_scheduler.py --once` | 跑一次完整 ETL（step01~step05）；跑前自检 + 跑后校验 |
 | `etl_scheduler.py` | 常驻调度：先跑一次，之后每天 02:00 跑 |
-| `verify_data.py` | 数据校验：19 项断言，全通过退出码 0 |
-| `build_init_sql.py` | 由分层 DDL 生成 `00_init_all.sql`；`--check` 校验是否同步 |
+  | `verify_data.py` | 数据校验：19 项断言，全通过退出码 0 |
+  | `maintain_partitions.py` | 幂等补齐 DWD 事实表的**未来月份分区**（`--dry-run` 只看不动；跑批前自动调用） |
+  | `build_init_sql.py` | 由分层 DDL 生成 `00_init_all.sql`；`--check` 校验是否同步 |
 | `export_screenshots.py` | 看板 PDF → README 用 PNG（自动裁白边、统一宽度） |
 | `render_quadrant_chart.py` | 不开 Jupyter，离线重绘四象限图 PNG |
 | `repair_stock_io_dupes.py` | 清理重复出入库流水的善后工具（默认 dry-run，`--apply` 才删且先自动备份） |
@@ -256,12 +269,16 @@ data_warehouse_project/
 
 ## 数据校验与自检
 
-跑批前后有**两道自动检查**，都挂在 `etl_scheduler.py` 上，性质不同：
+跑批前后有**四道自动检查**，都挂在 `etl_scheduler.py` 上，性质不同：
 
 | 时机 | 检查 | 失败后果 |
 |---|---|---|
+| 跑前 | `maintain_partitions.maintain()`：补齐事实表的未来月份分区 | ⚠️ 不阻断（分区不全会落到 `pmax`，功能仍正确） |
+| 跑前 | `check_disk_space()`：MySQL `datadir` 所在盘剩余空间（默认阈值 15 GB） | ❌ **不足则中止**（爆盘是真事故，见[项目亮点](#项目亮点)第 4 条） |
 | 跑前 | `build_init_sql.check()`：`00_init_all.sql` 是否与分层 DDL 同步 | ⚠️ **只打警告、不阻断**（表早已建好） |
 | 跑后 | `verify_data.run()`：数据是否自洽 | ❌ **整批算失败**（数据不自洽是真问题） |
+
+跳过开关：`--skip-partition-maintain` / `--skip-disk-check` / `--min-free-gb` / `--skip-init-check` / `--skip-verify`。
 
 `verify_data.py` 的 19 项断言覆盖三类：
 
@@ -296,15 +313,21 @@ data_warehouse_project/
 
 这个项目目前定位是**可独立复现的本地 Demo**，以下是明确的短板与后续计划：
 
+**已闭环**（曾列在这里，现已解决）：
+- ✅ DWD 事实表月度 `RANGE` 分区 + 按分区增量（原「DWD 起每日全量重算」）
+- ✅ MySQL binlog 保留期：用 `SET PERSIST binlog_expire_logs_seconds = 86400` 持久化
+  （写进 `datadir/mysqld-auto.cnf`，重启依然生效，无需管理员改 `my.ini`）
+- ✅ ODS 业务日期列索引缺失（原全表扫描）
+
 | 不足 | 影响 | 计划 |
 |---|---|---|
-| 增量链路只做到 ODS，DWD 起每日**全量重算** | 数据量再涨 10 倍就跑不动 | 事实表按业务日期做 `RANGE PARTITION` + 按日增量写入 |
+| **DWS / ADS 仍是全量重算**（占全流程 93% 耗时） | 日常跑批总耗时仍约 20 分钟 | DWS 按日期增量、ADS 按场景增量 |
 | 维度表无代理键、无 SCD（每日全量重建） | 客户/产品属性变更时**历史会被覆盖** | 对客户、产品维度实现 SCD Type 2 拉链表 |
-| `TRUNCATE` 隐式提交，事务原子性有缺口 | 步骤中途失败可能留下**空表** | 改为「写临时表 → 校验行数 → `RENAME` 原子切换」 |
+| `TRUNCATE PARTITION` / `TRUNCATE TABLE` 是 DDL、不可回滚 | 清理后 INSERT 失败会留下空分区/空表（**靠幂等重跑兜底**） | 改为 `EXCHANGE PARTITION`（算好临时表后原子换入） |
 | 无编排平台：用 Python `schedule` | 无 DAG 依赖、无一键补数、告警仅写日志 | 迁移 DolphinScheduler，按日期参数化 + 真告警 |
 | 无 Docker / CI / 单测，依赖未锁定 | 换机器复现成本高 | `docker compose` 一键起环境 + GitHub Actions + `pytest` |
-| MySQL `datadir` 在 C 盘，binlog 保留期未落盘配置 | **磁盘是系统性风险**（已出过一次事故） | 迁 `datadir` 到 D 盘；`binlog_expire_logs_seconds` 写进 `my.ini` |
-| 数据量 5.3 GB、单机 MySQL | 匹配不了「亿级 / 实时」类岗位 | 视目标岗位补充分区、OLAP 引擎（Doris/ClickHouse）或 CDC 实时链路 |
+| MySQL `datadir` 仍在 C 盘 | 磁盘是潜在风险（已出过一次事故，binlog 已收敛但数据盘未迁） | 迁 `datadir` 到 D 盘 |
+| 数据量 5.3 GB、单机 MySQL | 匹配不了「亿级 / 实时」类岗位 | 视目标岗位补 OLAP 引擎（Doris/ClickHouse）或 CDC 实时链路 |
 
 ---
 
