@@ -318,8 +318,29 @@ python scripts\verify_data.py     # 19 项断言，全通过退出码 0；会打
 2. **`TRUNCATE` 的原子性**：建议改成"写入临时表 → 成功后再原子切换"，或把 TRUNCATE 挪到 INSERT 之后（§4.5）。
 
 3. **MySQL 运维项**：
-   - ⬜ **把 `datadir` 从 C 盘迁到 D 盘**（C 约剩 24 GB / D 约剩 227 GB）—— 最彻底。
-     **紧迫性已下降**：binlog 已收敛到 1 天保留，且跑批前有自动磁盘检查兜底（见文末已闭环）
+   - ⬜ **把 `datadir` 从 C 盘迁到 D 盘**（C 约剩 24 GB / D 约剩 227 GB）。
+     **紧迫性已下降**：binlog 已收敛到 1 天保留，且跑批前有自动磁盘检查兜底（见文末已闭环），
+     所以这项可以等到有维护窗口时再做。
+     > ⚠️ `my.ini`（`C:\ProgramData\MySQL\MySQL Server 8.0\my.ini`）**当前用户不可写**，
+     > 必须用**管理员 PowerShell**；这是**不可逆操作**，请严格按下面顺序，出问题按最后一步回滚。
+     ```powershell
+     # 1) 复核现值：my.ini 中 datadir=C:/ProgramData/MySQL/MySQL Server 8.0\Data
+     # 2) 确认服务名（services.msc 里看，常见 MySQL80）
+     # 3) 停服务
+     net stop MySQL80
+     # 4) 复制数据（/COPYALL 保留 ACL，/DCOPY:T 保留目录时间戳）
+     robocopy "C:\ProgramData\MySQL\MySQL Server 8.0\Data" "D:\MySQL\Data" /E /COPYALL /DCOPY:T /R:1 /W:1
+     # 5) 校验复制结果（只列表不复制，核对文件数/大小是否一致）
+     robocopy "C:\ProgramData\MySQL\MySQL Server 8.0\Data" "D:\MySQL\Data" /L /E /NJH /NDL /FP /NS /NC
+     # 6) 编辑 my.ini：datadir 改为 D:/MySQL/Data    （改前先备份 my.ini）
+     # 7) 起服务
+     net start MySQL80
+     # 8) 验证（应全部通过）
+     mysql -uroot -p -e "SELECT @@datadir; SHOW BINARY LOGS;"
+     python scripts\verify_data.py
+     ```
+     **回滚**：把 `my.ini` 的 `datadir` 改回原路径 → `net stop` / `net start`。
+     **确认一切正常之前，不要删 C 盘的旧 `Data` 目录**（它是唯一的回滚路径）。
    - ⬜ 本项目无主从复制，可选 `skip-log-bin` 直接关掉 binlog
    - ⬜ 数据量太大可把 `SALE_ORDER_COUNT` 从 100 万降到 30 万（全库体积约 1/3）
 
