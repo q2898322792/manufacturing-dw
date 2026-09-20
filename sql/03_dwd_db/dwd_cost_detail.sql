@@ -1,6 +1,6 @@
 DROP TABLE IF EXISTS dwd_cost_detail;
 CREATE TABLE dwd_cost_detail (
-	voucher_id VARCHAR ( 32 ) PRIMARY KEY COMMENT '凭证ID（主键）',
+	voucher_id VARCHAR ( 32 ) COMMENT '凭证ID',
 	product_id VARCHAR ( 32 ) COMMENT '产品ID（关联dim_product）',
 	workshop_id VARCHAR ( 32 ) COMMENT '车间ID（关联dim_workshop）',
 	workorder_id VARCHAR ( 32 ) COMMENT '工单ID（关联dwd_produce_workorder_detail）',
@@ -11,7 +11,29 @@ CREATE TABLE dwd_cost_detail (
 	cost_month VARCHAR ( 7 ) COMMENT '成本月份（YYYY-MM）',
 	create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
 	update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+	-- 主键必须包含分区列（MySQL 硬性要求）。这里的业务日期列是 cost_month（'YYYY-MM' 字符串，
+	-- 字典序恰好等于时间序，所以可以直接作为 RANGE COLUMNS 的边界）。
+	PRIMARY KEY ( voucher_id, cost_month ),
 	INDEX idx_workorder_id ( workorder_id ),
 	INDEX idx_product_id ( product_id ),
-INDEX idx_cost_month ( cost_month ) 
-) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'DWD-成本明细事实表';
+	INDEX idx_cost_month ( cost_month )
+) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'DWD-成本明细事实表（按 cost_month 月度 RANGE 分区）'
+PARTITION BY RANGE COLUMNS ( cost_month ) (
+	PARTITION p202509 VALUES LESS THAN ( '2025-10' ),
+	PARTITION p202510 VALUES LESS THAN ( '2025-11' ),
+	PARTITION p202511 VALUES LESS THAN ( '2025-12' ),
+	PARTITION p202512 VALUES LESS THAN ( '2026-01' ),
+	PARTITION p202601 VALUES LESS THAN ( '2026-02' ),
+	PARTITION p202602 VALUES LESS THAN ( '2026-03' ),
+	PARTITION p202603 VALUES LESS THAN ( '2026-04' ),
+	PARTITION p202604 VALUES LESS THAN ( '2026-05' ),
+	PARTITION p202605 VALUES LESS THAN ( '2026-06' ),
+	PARTITION p202606 VALUES LESS THAN ( '2026-07' ),
+	PARTITION p202607 VALUES LESS THAN ( '2026-08' ),
+	PARTITION p202608 VALUES LESS THAN ( '2026-09' ),
+	PARTITION p202609 VALUES LESS THAN ( '2026-10' ),
+	PARTITION p202610 VALUES LESS THAN ( '2026-11' ),
+	PARTITION p202611 VALUES LESS THAN ( '2026-12' ),
+	PARTITION p202612 VALUES LESS THAN ( '2027-01' ),
+	PARTITION pmax    VALUES LESS THAN ( MAXVALUE )
+);

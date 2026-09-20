@@ -8,5 +8,6 @@ CREATE TABLE ods_wms_stock_snapshot (
 	stock_amount DECIMAL ( 12, 2 ) COMMENT '库存金额（元）',
 	create_time DATETIME COMMENT '源系统创建时间',
 	update_time DATETIME COMMENT '源系统更新时间',
-etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间' 
+etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间',
+INDEX idx_snapshot_date ( snapshot_date )
 ) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'ODS-库存快照事实表';

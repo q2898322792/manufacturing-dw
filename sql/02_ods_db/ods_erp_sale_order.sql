@@ -15,5 +15,6 @@ CREATE TABLE ods_erp_sale_order (
 	quantity INT COMMENT '订购数量',
 	create_time DATETIME COMMENT '源系统创建时间',
 	update_time DATETIME COMMENT '源系统更新时间',
-etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间' 
+etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间',
+INDEX idx_order_date ( order_date )
 ) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'ODS-销售订单事实表';

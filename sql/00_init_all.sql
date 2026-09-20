@@ -251,7 +251,8 @@ CREATE TABLE ods_erp_cost_voucher (
 	cost_month VARCHAR ( 7 ) COMMENT '成本月份（YYYY-MM）',
 	create_time DATETIME COMMENT '源系统创建时间',
 	update_time DATETIME COMMENT '源系统更新时间',
-etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间' 
+etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间',
+INDEX idx_cost_month ( cost_month )
 ) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'ODS-成本凭证事实表';
 
 -- ---------- ods_erp_customer.sql ----------
@@ -321,7 +322,8 @@ CREATE TABLE ods_erp_sale_order (
 	quantity INT COMMENT '订购数量',
 	create_time DATETIME COMMENT '源系统创建时间',
 	update_time DATETIME COMMENT '源系统更新时间',
-etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间' 
+etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间',
+INDEX idx_order_date ( order_date )
 ) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'ODS-销售订单事实表';
 
 -- ---------- ods_mes_equipment_runtime.sql ----------
@@ -338,7 +340,8 @@ CREATE TABLE ods_mes_equipment_runtime (
 	total_min INT DEFAULT 1440 COMMENT '当日总分钟数',
 	create_time DATETIME COMMENT '源系统创建时间',
 	update_time DATETIME COMMENT '源系统更新时间',
-etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间' 
+etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间',
+INDEX idx_record_date ( record_date )
 ) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'ODS-设备运行记录事实表';
 
 -- ---------- ods_mes_workorder.sql ----------
@@ -361,7 +364,8 @@ CREATE TABLE ods_mes_workorder (
 	material_loss DECIMAL ( 12, 2 ) COMMENT '物料损耗金额（元）',
 	create_time DATETIME COMMENT '源系统创建时间',
 	update_time DATETIME COMMENT '源系统更新时间',
-etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间' 
+etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间',
+INDEX idx_plan_start_date ( plan_start_date )
 ) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'ODS-生产工单事实表';
 
 -- ---------- ods_mes_workshop.sql ----------
@@ -393,7 +397,8 @@ CREATE TABLE ods_wms_stock_io (
 	order_id VARCHAR ( 32 ) COMMENT '订单ID',
 	create_time DATETIME COMMENT '源系统创建时间',
 	update_time DATETIME COMMENT '源系统更新时间',
-etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间' 
+etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间',
+INDEX idx_io_date ( io_date )
 ) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'ODS-出入库明细事实表';
 
 -- ---------- ods_wms_stock_snapshot.sql ----------
@@ -407,7 +412,8 @@ CREATE TABLE ods_wms_stock_snapshot (
 	stock_amount DECIMAL ( 12, 2 ) COMMENT '库存金额（元）',
 	create_time DATETIME COMMENT '源系统创建时间',
 	update_time DATETIME COMMENT '源系统更新时间',
-etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间' 
+etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间',
+INDEX idx_snapshot_date ( snapshot_date )
 ) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'ODS-库存快照事实表';
 
 -- ---------- ods_wms_supplier.sql ----------
@@ -532,7 +538,7 @@ update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMME
 -- ---------- dwd_cost_detail.sql ----------
 DROP TABLE IF EXISTS dwd_cost_detail;
 CREATE TABLE dwd_cost_detail (
-	voucher_id VARCHAR ( 32 ) PRIMARY KEY COMMENT '凭证ID（主键）',
+	voucher_id VARCHAR ( 32 ) COMMENT '凭证ID',
 	product_id VARCHAR ( 32 ) COMMENT '产品ID（关联dim_product）',
 	workshop_id VARCHAR ( 32 ) COMMENT '车间ID（关联dim_workshop）',
 	workorder_id VARCHAR ( 32 ) COMMENT '工单ID（关联dwd_produce_workorder_detail）',
@@ -543,15 +549,37 @@ CREATE TABLE dwd_cost_detail (
 	cost_month VARCHAR ( 7 ) COMMENT '成本月份（YYYY-MM）',
 	create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
 	update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+	-- 主键必须包含分区列（MySQL 硬性要求）。这里的业务日期列是 cost_month（'YYYY-MM' 字符串，
+	-- 字典序恰好等于时间序，所以可以直接作为 RANGE COLUMNS 的边界）。
+	PRIMARY KEY ( voucher_id, cost_month ),
 	INDEX idx_workorder_id ( workorder_id ),
 	INDEX idx_product_id ( product_id ),
-INDEX idx_cost_month ( cost_month ) 
-) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'DWD-成本明细事实表';
+	INDEX idx_cost_month ( cost_month )
+) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'DWD-成本明细事实表（按 cost_month 月度 RANGE 分区）'
+PARTITION BY RANGE COLUMNS ( cost_month ) (
+	PARTITION p202509 VALUES LESS THAN ( '2025-10' ),
+	PARTITION p202510 VALUES LESS THAN ( '2025-11' ),
+	PARTITION p202511 VALUES LESS THAN ( '2025-12' ),
+	PARTITION p202512 VALUES LESS THAN ( '2026-01' ),
+	PARTITION p202601 VALUES LESS THAN ( '2026-02' ),
+	PARTITION p202602 VALUES LESS THAN ( '2026-03' ),
+	PARTITION p202603 VALUES LESS THAN ( '2026-04' ),
+	PARTITION p202604 VALUES LESS THAN ( '2026-05' ),
+	PARTITION p202605 VALUES LESS THAN ( '2026-06' ),
+	PARTITION p202606 VALUES LESS THAN ( '2026-07' ),
+	PARTITION p202607 VALUES LESS THAN ( '2026-08' ),
+	PARTITION p202608 VALUES LESS THAN ( '2026-09' ),
+	PARTITION p202609 VALUES LESS THAN ( '2026-10' ),
+	PARTITION p202610 VALUES LESS THAN ( '2026-11' ),
+	PARTITION p202611 VALUES LESS THAN ( '2026-12' ),
+	PARTITION p202612 VALUES LESS THAN ( '2027-01' ),
+	PARTITION pmax    VALUES LESS THAN ( MAXVALUE )
+);
 
 -- ---------- dwd_equipment_runtime.sql ----------
 DROP TABLE IF EXISTS dwd_equipment_runtime;
 CREATE TABLE dwd_equipment_runtime (
-	record_id VARCHAR ( 32 ) PRIMARY KEY COMMENT '记录ID（主键）',
+	record_id VARCHAR ( 32 ) COMMENT '记录ID',
 	equipment_id VARCHAR ( 32 ) COMMENT '设备ID（关联dim_equipment）',
 	workshop_id VARCHAR ( 32 ) COMMENT '车间ID（关联dim_workshop）',
 	record_date DATE COMMENT '记录日期',
@@ -562,15 +590,36 @@ CREATE TABLE dwd_equipment_runtime (
 	total_min INT DEFAULT 1440 COMMENT '当日总分钟数',
 	create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
 	update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+	-- 主键必须包含分区列（MySQL 硬性要求）
+	PRIMARY KEY ( record_id, record_date ),
 	INDEX idx_record_date ( record_date ),
 	INDEX idx_equipment_id ( equipment_id ),
-INDEX idx_workshop_id ( workshop_id ) 
-) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'DWD-设备运行记录事实表';
+	INDEX idx_workshop_id ( workshop_id )
+) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'DWD-设备运行记录事实表（按 record_date 月度 RANGE 分区）'
+PARTITION BY RANGE COLUMNS ( record_date ) (
+	PARTITION p202509 VALUES LESS THAN ( '2025-10-01' ),
+	PARTITION p202510 VALUES LESS THAN ( '2025-11-01' ),
+	PARTITION p202511 VALUES LESS THAN ( '2025-12-01' ),
+	PARTITION p202512 VALUES LESS THAN ( '2026-01-01' ),
+	PARTITION p202601 VALUES LESS THAN ( '2026-02-01' ),
+	PARTITION p202602 VALUES LESS THAN ( '2026-03-01' ),
+	PARTITION p202603 VALUES LESS THAN ( '2026-04-01' ),
+	PARTITION p202604 VALUES LESS THAN ( '2026-05-01' ),
+	PARTITION p202605 VALUES LESS THAN ( '2026-06-01' ),
+	PARTITION p202606 VALUES LESS THAN ( '2026-07-01' ),
+	PARTITION p202607 VALUES LESS THAN ( '2026-08-01' ),
+	PARTITION p202608 VALUES LESS THAN ( '2026-09-01' ),
+	PARTITION p202609 VALUES LESS THAN ( '2026-10-01' ),
+	PARTITION p202610 VALUES LESS THAN ( '2026-11-01' ),
+	PARTITION p202611 VALUES LESS THAN ( '2026-12-01' ),
+	PARTITION p202612 VALUES LESS THAN ( '2027-01-01' ),
+	PARTITION pmax    VALUES LESS THAN ( MAXVALUE )
+);
 
 -- ---------- dwd_produce_workorder_detail.sql ----------
 DROP TABLE IF EXISTS dwd_produce_workorder_detail;
 CREATE TABLE dwd_produce_workorder_detail (
-	workorder_id VARCHAR ( 32 ) PRIMARY KEY COMMENT '工单号（主键）',
+	workorder_id VARCHAR ( 32 ) COMMENT '工单号',
 	product_id VARCHAR ( 32 ) COMMENT '产品ID（关联dim_product）',
 	workshop_id VARCHAR ( 32 ) COMMENT '车间ID（关联dim_workshop）',
 	plan_qty INT COMMENT '计划产量',
@@ -587,16 +636,37 @@ CREATE TABLE dwd_produce_workorder_detail (
 	material_loss DECIMAL ( 12, 2 ) COMMENT '物料损耗金额（元）',
 	create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
 	update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+	-- 主键必须包含分区列（MySQL 硬性要求）
+	PRIMARY KEY ( workorder_id, plan_start_date ),
 	INDEX idx_plan_start_date ( plan_start_date ),
 	INDEX idx_product_id ( product_id ),
 	INDEX idx_workshop_id ( workshop_id ),
-INDEX idx_workorder_status ( workorder_status ) 
-) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'DWD-生产工单明细事实表';
+	INDEX idx_workorder_status ( workorder_status )
+) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'DWD-生产工单明细事实表（按 plan_start_date 月度 RANGE 分区）'
+PARTITION BY RANGE COLUMNS ( plan_start_date ) (
+	PARTITION p202509 VALUES LESS THAN ( '2025-10-01' ),
+	PARTITION p202510 VALUES LESS THAN ( '2025-11-01' ),
+	PARTITION p202511 VALUES LESS THAN ( '2025-12-01' ),
+	PARTITION p202512 VALUES LESS THAN ( '2026-01-01' ),
+	PARTITION p202601 VALUES LESS THAN ( '2026-02-01' ),
+	PARTITION p202602 VALUES LESS THAN ( '2026-03-01' ),
+	PARTITION p202603 VALUES LESS THAN ( '2026-04-01' ),
+	PARTITION p202604 VALUES LESS THAN ( '2026-05-01' ),
+	PARTITION p202605 VALUES LESS THAN ( '2026-06-01' ),
+	PARTITION p202606 VALUES LESS THAN ( '2026-07-01' ),
+	PARTITION p202607 VALUES LESS THAN ( '2026-08-01' ),
+	PARTITION p202608 VALUES LESS THAN ( '2026-09-01' ),
+	PARTITION p202609 VALUES LESS THAN ( '2026-10-01' ),
+	PARTITION p202610 VALUES LESS THAN ( '2026-11-01' ),
+	PARTITION p202611 VALUES LESS THAN ( '2026-12-01' ),
+	PARTITION p202612 VALUES LESS THAN ( '2027-01-01' ),
+	PARTITION pmax    VALUES LESS THAN ( MAXVALUE )
+);
 
 -- ---------- dwd_sale_order_detail.sql ----------
 DROP TABLE IF EXISTS dwd_sale_order_detail;
 CREATE TABLE dwd_sale_order_detail (
-	order_id VARCHAR ( 32 ) PRIMARY KEY COMMENT '订单号（主键）',
+	order_id VARCHAR ( 32 ) COMMENT '订单号',
 	customer_id VARCHAR ( 32 ) COMMENT '客户ID（关联dim_customer）',
 	product_id VARCHAR ( 32 ) COMMENT '产品ID（关联dim_product）',
 	order_date DATE COMMENT '下单日期',
@@ -611,16 +681,38 @@ CREATE TABLE dwd_sale_order_detail (
 	quantity INT COMMENT '订购数量',
 	create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
 	update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+	-- 主键必须包含分区列（MySQL 硬性要求：每个唯一索引都要包含所有分区列）。
+	-- order_id 本身仍是唯一的，这里只是把键变宽；注意不要再按 order_id 单独做 UPSERT（不会再冲突）。
+	PRIMARY KEY ( order_id, order_date ),
 	INDEX idx_order_date ( order_date ),
 	INDEX idx_customer_id ( customer_id ),
 	INDEX idx_product_id ( product_id ),
-INDEX idx_order_status ( order_status ) 
-) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'DWD-销售订单明细事实表';
+	INDEX idx_order_status ( order_status )
+) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'DWD-销售订单明细事实表（按 order_date 月度 RANGE 分区）'
+PARTITION BY RANGE COLUMNS ( order_date ) (
+	PARTITION p202509 VALUES LESS THAN ( '2025-10-01' ),
+	PARTITION p202510 VALUES LESS THAN ( '2025-11-01' ),
+	PARTITION p202511 VALUES LESS THAN ( '2025-12-01' ),
+	PARTITION p202512 VALUES LESS THAN ( '2026-01-01' ),
+	PARTITION p202601 VALUES LESS THAN ( '2026-02-01' ),
+	PARTITION p202602 VALUES LESS THAN ( '2026-03-01' ),
+	PARTITION p202603 VALUES LESS THAN ( '2026-04-01' ),
+	PARTITION p202604 VALUES LESS THAN ( '2026-05-01' ),
+	PARTITION p202605 VALUES LESS THAN ( '2026-06-01' ),
+	PARTITION p202606 VALUES LESS THAN ( '2026-07-01' ),
+	PARTITION p202607 VALUES LESS THAN ( '2026-08-01' ),
+	PARTITION p202608 VALUES LESS THAN ( '2026-09-01' ),
+	PARTITION p202609 VALUES LESS THAN ( '2026-10-01' ),
+	PARTITION p202610 VALUES LESS THAN ( '2026-11-01' ),
+	PARTITION p202611 VALUES LESS THAN ( '2026-12-01' ),
+	PARTITION p202612 VALUES LESS THAN ( '2027-01-01' ),
+	PARTITION pmax    VALUES LESS THAN ( MAXVALUE )
+);
 
 -- ---------- dwd_stock_io_detail.sql ----------
 DROP TABLE IF EXISTS dwd_stock_io_detail;
 CREATE TABLE dwd_stock_io_detail (
-	io_id VARCHAR ( 32 ) PRIMARY KEY COMMENT '出入库记录ID（主键）',
+	io_id VARCHAR ( 32 ) COMMENT '出入库记录ID',
 	material_id VARCHAR ( 32 ) COMMENT '物料ID（关联dim_material）',
 	warehouse_id VARCHAR ( 32 ) COMMENT '仓库ID',
 	io_type VARCHAR ( 10 ) COMMENT '出入库类型（IN/OUT）',
@@ -633,13 +725,34 @@ CREATE TABLE dwd_stock_io_detail (
 	order_id VARCHAR ( 32 ) COMMENT '订单ID（关联dwd_sale_order_detail）',
 	create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
 	update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+	-- 主键必须包含分区列（MySQL 硬性要求）
+	PRIMARY KEY ( io_id, io_date ),
 	INDEX idx_io_date ( io_date ),
 	INDEX idx_material_id ( material_id ),
 	INDEX idx_io_type ( io_type ),
 	INDEX idx_workorder_id ( workorder_id ),
 	INDEX idx_mat_wh_date ( material_id, warehouse_id, io_date ),
-INDEX idx_order_id ( order_id ) 
-) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'DWD-出入库明细事实表';
+	INDEX idx_order_id ( order_id )
+) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'DWD-出入库明细事实表（按 io_date 月度 RANGE 分区）'
+PARTITION BY RANGE COLUMNS ( io_date ) (
+	PARTITION p202509 VALUES LESS THAN ( '2025-10-01' ),
+	PARTITION p202510 VALUES LESS THAN ( '2025-11-01' ),
+	PARTITION p202511 VALUES LESS THAN ( '2025-12-01' ),
+	PARTITION p202512 VALUES LESS THAN ( '2026-01-01' ),
+	PARTITION p202601 VALUES LESS THAN ( '2026-02-01' ),
+	PARTITION p202602 VALUES LESS THAN ( '2026-03-01' ),
+	PARTITION p202603 VALUES LESS THAN ( '2026-04-01' ),
+	PARTITION p202604 VALUES LESS THAN ( '2026-05-01' ),
+	PARTITION p202605 VALUES LESS THAN ( '2026-06-01' ),
+	PARTITION p202606 VALUES LESS THAN ( '2026-07-01' ),
+	PARTITION p202607 VALUES LESS THAN ( '2026-08-01' ),
+	PARTITION p202608 VALUES LESS THAN ( '2026-09-01' ),
+	PARTITION p202609 VALUES LESS THAN ( '2026-10-01' ),
+	PARTITION p202610 VALUES LESS THAN ( '2026-11-01' ),
+	PARTITION p202611 VALUES LESS THAN ( '2026-12-01' ),
+	PARTITION p202612 VALUES LESS THAN ( '2027-01-01' ),
+	PARTITION pmax    VALUES LESS THAN ( MAXVALUE )
+);
 
 -- ---------- dwd_stock_snapshot.sql ----------
 DROP TABLE IF EXISTS dwd_stock_snapshot;
@@ -651,10 +764,30 @@ CREATE TABLE dwd_stock_snapshot (
 	stock_amount DECIMAL ( 16, 2 ) COMMENT '库存金额（元）',
 	create_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
 	update_time DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+	-- 主键天然包含分区列 snapshot_date，无需调整
 	PRIMARY KEY ( snapshot_date, material_id, warehouse_id ),
 	INDEX idx_material_id ( material_id ),
-	INDEX idx_warehouse_id ( warehouse_id ) 
-) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'DWD-库存快照事实表（每日物料×仓库库存）';
+	INDEX idx_warehouse_id ( warehouse_id )
+) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'DWD-库存快照事实表（每日物料×仓库库存，按 snapshot_date 月度 RANGE 分区）'
+PARTITION BY RANGE COLUMNS ( snapshot_date ) (
+	PARTITION p202509 VALUES LESS THAN ( '2025-10-01' ),
+	PARTITION p202510 VALUES LESS THAN ( '2025-11-01' ),
+	PARTITION p202511 VALUES LESS THAN ( '2025-12-01' ),
+	PARTITION p202512 VALUES LESS THAN ( '2026-01-01' ),
+	PARTITION p202601 VALUES LESS THAN ( '2026-02-01' ),
+	PARTITION p202602 VALUES LESS THAN ( '2026-03-01' ),
+	PARTITION p202603 VALUES LESS THAN ( '2026-04-01' ),
+	PARTITION p202604 VALUES LESS THAN ( '2026-05-01' ),
+	PARTITION p202605 VALUES LESS THAN ( '2026-06-01' ),
+	PARTITION p202606 VALUES LESS THAN ( '2026-07-01' ),
+	PARTITION p202607 VALUES LESS THAN ( '2026-08-01' ),
+	PARTITION p202608 VALUES LESS THAN ( '2026-09-01' ),
+	PARTITION p202609 VALUES LESS THAN ( '2026-10-01' ),
+	PARTITION p202610 VALUES LESS THAN ( '2026-11-01' ),
+	PARTITION p202611 VALUES LESS THAN ( '2026-12-01' ),
+	PARTITION p202612 VALUES LESS THAN ( '2027-01-01' ),
+	PARTITION pmax    VALUES LESS THAN ( MAXVALUE )
+);
 
 -- ============================================================
 -- dws_db（5 张表）

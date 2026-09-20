@@ -13,5 +13,6 @@ CREATE TABLE ods_wms_stock_io (
 	order_id VARCHAR ( 32 ) COMMENT '订单ID',
 	create_time DATETIME COMMENT '源系统创建时间',
 	update_time DATETIME COMMENT '源系统更新时间',
-etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间' 
+etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间',
+INDEX idx_io_date ( io_date )
 ) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'ODS-出入库明细事实表';

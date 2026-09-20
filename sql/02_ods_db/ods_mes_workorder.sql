@@ -17,5 +17,6 @@ CREATE TABLE ods_mes_workorder (
 	material_loss DECIMAL ( 12, 2 ) COMMENT '物料损耗金额（元）',
 	create_time DATETIME COMMENT '源系统创建时间',
 	update_time DATETIME COMMENT '源系统更新时间',
-etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间' 
+etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间',
+INDEX idx_plan_start_date ( plan_start_date )
 ) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'ODS-生产工单事实表';

@@ -594,6 +594,69 @@ def generate_incremental_equipment(target_date):
 # 六、主程序
 # ============================================================
 
+# ============================================================
+# 六点五、维度变更（为 SCD Type 2 拉链表提供"历史版本"）
+# ============================================================
+# 背景：全量生成器只在首次造一次客户/产品，增量脚本原本**完全不碰维度** →
+#       dim_customer / dim_product 永远只有一条"当前版本"，SCD2 拉链表会空转。
+#       这里每次增量运行**变更极少量维度属性**，让拉链真的产生历史。
+#
+# 两个原则：
+#   1. **只改不影响指标的属性** —— 客户 `grade`、产品 `category_l2`。
+#      ⚠️ `product.standard_cost` 绝不能动：它被成本/毛利指标引用（见 PROJECT_MEMORY §3）。
+#   2. **幂等** —— 以 (目标日期, 主键) 做 md5 稳定取值，同一区间重复回补得到相同的目标值；
+#      若当前值已等于目标值则跳过，不会反复追加版本。
+#      （改了 `update_time`，所以会被 step01 的水位捕获、同步进 ODS，再被 step02 拉链化。）
+DIM_CHANGE_RATE = 0.01          # 每天约 1% 的客户 / 产品发生属性变更
+
+
+def generate_incremental_dimension(target_date):
+    """
+    变更少量维度属性，为 SCD Type 2 拉链提供历史版本。
+    返回 (客户变更数, 产品变更数)。
+    """
+    chg_c = chg_p = 0
+    seed = str(target_date)
+
+    # ---------- 客户：只改 grade（不影响任何指标） ----------
+    cursor.execute("SELECT customer_id, grade FROM erp_db.customer")
+    rows = cursor.fetchall()
+    grades = sorted({r[1] for r in rows if r[1]})
+    if len(grades) > 1:
+        for cid, g in rows:
+            if _stable_ratio(cid, 'custchg:' + seed) >= DIM_CHANGE_RATE:
+                continue
+            idx = int(_stable_ratio(cid, 'custgr:' + seed) * len(grades)) % len(grades)
+            new_g = grades[idx]
+            if new_g == g:
+                continue
+            cursor.execute(
+                "UPDATE erp_db.customer SET grade=%s, update_time=%s WHERE customer_id=%s",
+                (new_g, datetime.datetime.now(), cid))
+            chg_c += 1
+
+    # ---------- 产品：只改 category_l2（不影响任何指标） ----------
+    cursor.execute("SELECT product_id, category_l2 FROM erp_db.product")
+    rows = cursor.fetchall()
+    cats = sorted({r[1] for r in rows if r[1]})
+    if len(cats) > 1:
+        for pid, c2 in rows:
+            if _stable_ratio(pid, 'prodchg:' + seed) >= DIM_CHANGE_RATE:
+                continue
+            idx = int(_stable_ratio(pid, 'prodcat:' + seed) * len(cats)) % len(cats)
+            new_c = cats[idx]
+            if new_c == c2:
+                continue
+            cursor.execute(
+                "UPDATE erp_db.product SET category_l2=%s, update_time=%s WHERE product_id=%s",
+                (new_c, datetime.datetime.now(), pid))
+            chg_p += 1
+
+    conn.commit()
+    print(f"  🔁 维度变更：客户 {chg_c} 个、产品 {chg_p} 个（为 SCD2 拉链新增版本）")
+    return chg_c, chg_p
+
+
 def generate_incremental_data(start_date, end_date):
     """按天生成增量数据（**逐表判断**是否已有数据，支持区间回补与断点续跑）
 
@@ -644,6 +707,18 @@ def generate_incremental_data(start_date, end_date):
         done += 1
         print(f"✅ {current_date} 处理完成")
         current_date += datetime.timedelta(days=1)
+
+    # 维度变更不放进按日循环：维度没有"业务日期"概念，每次运行只做一次。
+    # 用 end_date 作为幂等种子 → 同一区间重复回补不会重复追加版本。
+    print("\n" + "=" * 60)
+    print("🔁 维度变更（为 SCD Type 2 拉链提供历史版本）")
+    print("=" * 60)
+    try:
+        generate_incremental_dimension(end_date)
+    except Exception as e:
+        conn.rollback()
+        failed.append((end_date, '维度变更', str(e)))
+        print(f"  ❌ 维度变更 失败: {e}")
 
     print("\n" + "=" * 60)
     print(f"🎉 增量数据生成完成！处理 {done} 天，跳过 {skipped} 天，失败 {len(failed)} 项")

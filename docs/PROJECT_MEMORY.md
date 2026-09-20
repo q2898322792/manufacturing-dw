@@ -104,18 +104,24 @@ generate_fake_data.py  →  sql/06_etl_scripts/step00_ods_full_reset.sql  →  e
 
 1. **`sql/01~05` 是建表脚本的唯一数据源**。改了分层 DDL 后必须跑 `python scripts\build_init_sql.py` 重新生成 `sql/00_init_all.sql`；
    忘了的话下次 ETL 日志会提醒（`--check` 可单独校验）。
-2. **两道自动检查，性质不同**（都挂在 `etl_scheduler.py`）：
-   - 跑前 `build_init_sql.check()`：`00_init_all.sql` 是否与分层 DDL 同步 → **只警告，不阻断**（表早建好了）
+2. **四道自动检查**（都挂在 `etl_scheduler.py`，性质不同）：
+   - 跑前 `maintain_partitions.maintain()`：补齐 DWD 事实表的**未来月份分区** → **失败不阻断**（分区不全会落到 pmax，功能仍正确）
+   - 跑前 `check_disk_space()`：MySQL `datadir` 所在盘剩余空间 → **不足则直接中止**（防爆盘）
+   - 跑前 `build_init_sql.check()`：`00_init_all.sql` 是否与分层 DDL 同步 → **只警告，不阻断**
    - 跑后 `verify_data.run()`：19 项数据断言 → **失败即整批算失败**（数据不自洽是真问题）
-   - 跳过开关：`--skip-init-check` / `--skip-verify`
+   - 跳过开关：`--skip-partition-maintain` / `--skip-disk-check` / `--min-free-gb` / `--skip-init-check` / `--skip-verify`
 3. **`verify_data.py` 的 19 项断言分三组**：规模（ADS 表非空 + 打印真实行数/日期范围）、
    对账（营收/产量跨层一致 DWD = DWS = ADS，容差 0.1% 相对误差，容忍 `ROUND` 舍入漂移）、
    一致性（预警 5 类齐全且主键唯一、库存健康单一基准日、大屏逐日无断层、维度无孤儿——
    注意 `UNKNOWN` 之类上游占位值**不算孤儿**，已列入白名单）。
 4. **`etl_scheduler.py: COMMIT_PER_STATEMENT = True`**：每条 SQL 单独提交。这是第三轮"disk full"事故的对策，
    **不要贸然改回整脚本单事务**（峰值 undo/binlog 会撑爆磁盘）。
-5. **`TRUNCATE` 隐式提交**：调度器是"整个脚本成功才 commit"，所以 step 中途失败会出现
-   **前面的 TRUNCATE 已生效、后面的 INSERT 被回滚 → 表被清空**。这是已知遗留风险（§7.3）。
+5. **`TRUNCATE` 隐式提交的原子性缺口 —— 已在 step03 修掉**：调度器是"整个脚本成功才 commit"，
+   原先 step03 开头 6 条 `TRUNCATE`（隐式提交、不可回滚），中途失败会留下**空表**。
+   现在 step03 改为 **`DELETE FROM ... WHERE <业务日期> BETWEEN @d1 AND @d2`**：
+   DELETE 是 DML、受事务保护，失败可整体回滚。
+   > ⚠️ 但 **step04 / step05 仍用 `TRUNCATE`**（它们重建 DWS/ADS，代价小、可从 DWD 重算），
+   > 这个缺口在那两步依然存在。要彻底解决得改成"写临时表 → 校验 → `RENAME` 原子切换"（见 §7）。
 6. **matplotlib 不要用 U+2212「−」（真减号）**：notebook 字体是 `SimHei`（GB2312 系），没有该字形，图上会显示成方框 `□`，用 ASCII `-`。
    `scripts/render_quadrant_chart.py` **刻意**与 notebook 使用完全相同的字体配置，就是为了让离线预览暴露这类字体问题——**别把它换成字形更全的字体**。
 7. **Jupyter 改完代码要 Restart & Run All**：历史上两次出现"新图被 Jupyter 内存里的旧代码覆盖"，
@@ -126,7 +132,7 @@ generate_fake_data.py  →  sql/06_etl_scripts/step00_ods_full_reset.sql  →  e
 
    | 表 | 每行代表 | KPI 卡正确做法 |
    |---|---|---|
-   | `ads_boss_dashboard` | **一天**的经营全貌（272 行逐日快照） | ⚠️ 必须筛选到某一天，**不能直接求和** |
+   | `ads_boss_dashboard` | **一天**的经营全貌（353 行逐日快照） | ⚠️ 必须筛选到某一天，**不能直接求和** |
    | `ads_sale_analysis` | 一天 × 一客户 × 一产品 | ✅ 求和 |
    | `ads_produce_monitor` | 一天 × 一车间 × 一产品 | ✅ 数量求和；**比率要重算** |
    | `ads_stock_health` | 一物料 × 一仓库（**单日快照**） | ✅ 求和 |
@@ -151,6 +157,38 @@ generate_fake_data.py  →  sql/06_etl_scripts/step00_ods_full_reset.sql  →  e
 11. **`stock_io_detail` 没有业务唯一键**（主键只是 UUID `io_id`），
     同样的重复写入不会报错，只会静默翻倍。判断某天"是否已生成"必须以
     **每张被写的表自己的业务日期列**为准，不能拿 `erp_db.sale_order` 代表整天（见 §5.6）。
+
+12. **DWD 事实表按业务日期做月度 RANGE 分区**（`dwd_db` 的 6 张 `dwd_*`）。
+    改这些表时注意三条：
+    - **分区列必须出现在每个唯一索引（含主键）里** —— 这是 MySQL 的硬性要求。
+      所以 5 张表的 PK 是复合键：`dwd_sale_order_detail(order_id, order_date)`、
+      `dwd_produce_workorder_detail(workorder_id, plan_start_date)`、`dwd_stock_io_detail(io_id, io_date)`、
+      `dwd_cost_detail(voucher_id, cost_month)`、`dwd_equipment_runtime(record_id, record_date)`。
+      ⚠️ **不要再按 id 单独做 `ON DUPLICATE KEY UPDATE`** —— 复合键下不会再冲突。
+    - **分区维护**：`scripts/maintain_partitions.py`（跑批前自动调用）补齐"当前月 ~ 未来 3 个月"。
+      末尾是 `pmax (MAXVALUE)`，所以**不能直接 `ADD PARTITION`**，必须
+      `REORGANIZE PARTITION pmax INTO (新分区..., pmax)`。
+    - 分区列是 `'YYYY-MM'` 字符串的表只有 `dwd_cost_detail`（`cost_month`），
+      字典序恰好等于时间序，可以直接当 `RANGE COLUMNS` 边界。
+
+13. **step03 是「按日增量」，不是全量**：
+    `区间 = [max(DWD 该表业务日期) − 45 天, max(ODS 该表业务日期)]`，`DELETE` + `INSERT`。
+    DWD 为空（首次 / 整表重建）时自动退化为"从 ODS 最小日期开始"= 全量。
+    45 天（`@lookback`）需大于历史最大缺口（历史最大 30 天）；
+    **若存在更大的历史缺口，把 `@lookback` 调大或先清表再跑**，否则会漏补。
+
+14. **维度 SCD Type 2 —— 规划中，尚未实施**（设计已定，见 §7）：
+    前提已就绪：`generate_incremental_data.py` 的 `generate_incremental_dimension()`
+    每次运行变更约 1% 的维度属性（**只改 `customer.grade` 与 `product.category_l2`**，
+    **绝不能改 `product.standard_cost`** —— 被成本/毛利指标引用）。
+    但 `dim_customer` / `dim_product` 的**建表 DDL 与 step02 加载逻辑还没改**，所以目前
+    维度仍是"每日全量重建、只留当前版本"，不会产生历史。
+    > ⚠️ **实施时三件事必须一起改，否则必崩**（详见 §7）：
+    >   · dim DDL 加 `valid_from/valid_to/is_current/version`，主键改 `(业务主键, valid_from)`；
+    >     用「生成列 `cur_key` + 唯一键」保证每个主键最多一条 `is_current=1`
+    >   · step02 改成 SCD2 合并（关旧版本 → 插新版本）
+    >   · **step05 里所有 JOIN 这两张维度的 6 处都要加 `AND x.is_current = 1`** ——
+    >     漏一处就是一个主键匹配多行 → **笛卡尔积**（营收/产量翻倍）
 
 ---
 

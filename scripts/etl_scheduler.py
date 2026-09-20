@@ -12,7 +12,8 @@ ETL 自动调度脚本（独立 Demo · 修复版）
     python scripts/etl_scheduler.py --once --time 02:00
     python scripts/etl_scheduler.py --max-retries 1 --retry-interval 5   # 便于调试时缩短重试
 
-跑批前后三道检查（都可单独关掉）：
+跑批前后四道检查（都可单独关掉）：
+    跑前  月度分区维护（补齐未来月份）        --skip-partition-maintain
     跑前  磁盘剩余空间检查（不足则中止）      --skip-disk-check / --min-free-gb
     跑前  建表脚本是否同步（只提醒不阻断）    --skip-init-check
     跑后  数据自洽性校验（不过则整批失败）    --skip-verify
@@ -113,6 +114,14 @@ VERIFY_AFTER_ETL = True
 #       用 --skip-disk-check 跳过；--min-free-gb 覆盖阈值。
 DISK_CHECK = True
 MIN_FREE_GB = 15.0
+
+# 跑批前维护 DWD 事实表的月度分区
+# ------------------------------------------------------------
+# DWD 6 张事实表按业务日期做了月度 RANGE 分区，末尾留了 pmax(MAXVALUE) 兜底。
+# 新月份的数据若落进 pmax，就失去分区剪枝的意义 → 每次跑批前自动补齐未来月份分区。
+# 实现见 scripts/maintain_partitions.py（幂等：已存在的分区不会重复建，无缺失则空转）。
+#       用 --skip-partition-maintain 跳过。
+MAINTAIN_PARTITIONS = True
 
 # ============================================================
 # 二、日志模块
@@ -468,6 +477,18 @@ def run_etl_pipeline(max_retries: int = MAX_RETRIES,
             logger.error("   确认可忽略时用 --skip-disk-check 强制跑批。")
             return False
 
+    # 跑批前维护月度分区（补齐未来月份，防止新数据落进 pmax 失去剪枝）
+    if MAINTAIN_PARTITIONS:
+        try:
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import maintain_partitions
+            _, n, lines = maintain_partitions.maintain(logger=logger)
+            if n == 0:
+                logger.info("✅ 分区维护：无需变更")
+        except Exception as e:
+            # 分区维护失败不应阻断跑批（分区不全会落到 pmax，功能仍然正确）
+            logger.warning(f"⚠️ 分区维护跳过（{e}）")
+
     start_time = time.time()
     failed_steps: List[str] = []
 
@@ -566,6 +587,8 @@ def parse_args():
                         help='跳过跑批前的磁盘剩余空间检查（默认会检查，不足则中止跑批）')
     parser.add_argument('--min-free-gb', type=float, default=None,
                         help=f'磁盘剩余空间阈值（GB），默认 {MIN_FREE_GB}')
+    parser.add_argument('--skip-partition-maintain', action='store_true',
+                        help='跳过跑批前的月度分区维护（默认会补齐未来月份分区）')
     return parser.parse_args()
 
 
@@ -580,6 +603,8 @@ if __name__ == "__main__":
         DISK_CHECK = False
     if args.min_free_gb is not None:
         MIN_FREE_GB = args.min_free_gb
+    if args.skip_partition_maintain:
+        MAINTAIN_PARTITIONS = False
 
     if args.once:
         ok = run_etl_pipeline(

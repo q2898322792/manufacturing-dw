@@ -11,5 +11,6 @@ CREATE TABLE ods_mes_equipment_runtime (
 	total_min INT DEFAULT 1440 COMMENT '当日总分钟数',
 	create_time DATETIME COMMENT '源系统创建时间',
 	update_time DATETIME COMMENT '源系统更新时间',
-etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间' 
+etl_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT 'ETL同步时间',
+INDEX idx_record_date ( record_date )
 ) ENGINE = INNODB DEFAULT CHARSET = utf8mb4 COMMENT = 'ODS-设备运行记录事实表';
