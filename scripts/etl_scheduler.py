@@ -12,6 +12,11 @@ ETL 自动调度脚本（独立 Demo · 修复版）
     python scripts/etl_scheduler.py --once --time 02:00
     python scripts/etl_scheduler.py --max-retries 1 --retry-interval 5   # 便于调试时缩短重试
 
+跑批前后三道检查（都可单独关掉）：
+    跑前  磁盘剩余空间检查（不足则中止）      --skip-disk-check / --min-free-gb
+    跑前  建表脚本是否同步（只提醒不阻断）    --skip-init-check
+    跑后  数据自洽性校验（不过则整批失败）    --skip-verify
+
 修复点（相对旧版）：
     1. SQL 脚本切分改为“注释感知”解析：-- / # 行注释、/* */ 块注释会先被剥离，
        且字符串/标识符内的分号不会被误切。修复了旧版因语句以注释开头而整条被跳过
@@ -26,6 +31,7 @@ ETL 自动调度脚本（独立 Demo · 修复版）
 import os
 import sys
 import time
+import shutil
 import argparse
 import logging
 import traceback
@@ -97,6 +103,16 @@ CHECK_INIT_SQL = True
 # 这一项**失败会让整批算失败**——ETL 跑完但数据不自洽，是真问题。
 #       用 --skip-verify 可跳过。
 VERIFY_AFTER_ETL = True
+
+# 跑批前检查磁盘剩余空间（防止重演 `The table 'xxx' is full` 爆盘事故）
+# ------------------------------------------------------------
+# 背景：本项目出过一次事故——C 盘被写满，step03 写入失败，DWD 表被 TRUNCATE 后回滚成空表。
+#       跑批会写入数 GB（MySQL datadir + binlog + 中间表），所以**跑前先看剩余空间**。
+#       与上面两项的区别：这一项**不足时直接中止跑批**——不中止就会重演事故。
+#       检查对象是 MySQL datadir 所在盘（自动跟随 datadir 迁移），取不到则退回项目所在盘。
+#       用 --skip-disk-check 跳过；--min-free-gb 覆盖阈值。
+DISK_CHECK = True
+MIN_FREE_GB = 15.0
 
 # ============================================================
 # 二、日志模块
@@ -386,6 +402,44 @@ def verify_data_after_etl() -> bool:
         return True
 
 
+def check_disk_space(min_free_gb: float = MIN_FREE_GB) -> Tuple[bool, str]:
+    """
+    跑批前检查磁盘剩余空间。
+
+    检查对象优先取 MySQL 的 datadir 所在盘（数据实际写在那里，且能自动跟随 datadir 迁移）；
+    取不到则退回项目所在盘，再退回 C 盘。
+
+    返回 (是否充足, 说明文案)。任何探测异常都视为"跳过检查"（返回 True），
+    避免因为探不到磁盘反而挡住了正常跑批。
+    """
+    target = None
+    try:
+        conn = pymysql.connect(**DB_CONFIG)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT @@datadir")
+                row = cur.fetchone()
+            target = row[0] if row and row[0] else None
+        finally:
+            conn.close()
+    except Exception:
+        target = None
+
+    if not target:
+        target = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    try:
+        drive = os.path.splitdrive(os.path.abspath(target))[0] or "C:"
+        usage = shutil.disk_usage(drive + os.sep)
+        free_gb = usage.free / (1024 ** 3)
+        total_gb = usage.total / (1024 ** 3)
+        msg = (f"💾 磁盘检查：{drive} 可用 {free_gb:.1f} GB / 共 {total_gb:.1f} GB"
+               f"（datadir 所在盘，阈值 {min_free_gb:.0f} GB）")
+        return free_gb >= min_free_gb, msg
+    except Exception as e:
+        return True, f"⚠️ 磁盘检查跳过（{e}）"
+
+
 def run_etl_pipeline(max_retries: int = MAX_RETRIES,
                      retry_interval: int = RETRY_INTERVAL,
                      continue_on_error: bool = CONTINUE_ON_ERROR,
@@ -403,6 +457,16 @@ def run_etl_pipeline(max_retries: int = MAX_RETRIES,
     # 跑批前自检（只提醒，不阻断）
     if check_init:
         check_init_sql_sync()
+
+    # 跑批前磁盘检查（**不足则直接中止**——不中止就会重演 table is full 事故）
+    if DISK_CHECK:
+        disk_ok, disk_msg = check_disk_space(MIN_FREE_GB)
+        logger.info(disk_msg)
+        if not disk_ok:
+            logger.error("❌ 磁盘剩余空间不足，已中止本次 ETL。")
+            logger.error("   清理建议：跑 cleanup-c-drive.ps1 清 binlog；或腾出空间后重试。")
+            logger.error("   确认可忽略时用 --skip-disk-check 强制跑批。")
+            return False
 
     start_time = time.time()
     failed_steps: List[str] = []
@@ -498,6 +562,10 @@ def parse_args():
                         help='跳过"建表脚本是否同步"自检（默认会自检并提醒，不阻断）')
     parser.add_argument('--skip-verify', action='store_true',
                         help='跳过跑完后的数据校验（默认会校验，校验不过则整批算失败）')
+    parser.add_argument('--skip-disk-check', action='store_true',
+                        help='跳过跑批前的磁盘剩余空间检查（默认会检查，不足则中止跑批）')
+    parser.add_argument('--min-free-gb', type=float, default=None,
+                        help=f'磁盘剩余空间阈值（GB），默认 {MIN_FREE_GB}')
     return parser.parse_args()
 
 
@@ -506,6 +574,12 @@ if __name__ == "__main__":
     if args.log_dir != LOG_DIR:
         LOG_DIR = args.log_dir
         logger = setup_logging(LOG_DIR, force=True)  # noqa: F811 按新目录重建日志
+
+    # 命令行覆盖磁盘检查配置（模块级赋值，run_etl_pipeline 读全局）
+    if args.skip_disk_check:
+        DISK_CHECK = False
+    if args.min_free_gb is not None:
+        MIN_FREE_GB = args.min_free_gb
 
     if args.once:
         ok = run_etl_pipeline(
